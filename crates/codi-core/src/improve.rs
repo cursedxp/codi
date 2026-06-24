@@ -75,15 +75,12 @@ impl<'a> ImprovementExecutor<'a> {
             });
         }
 
-        // All pre-checks passed — increment count before executing
-        *auto_count += 1;
-
+        // All pre-checks passed — execute and only increment count on successful application
         let branch = branch_name(candidate, &self.cfg.self_improvement.branch_prefix);
         let result = self.execute(candidate, &branch, false, false)?;
 
-        // If execution failed, undo the quota increment
-        if matches!(result, Outcome::Failed { .. }) {
-            *auto_count -= 1;
+        if matches!(result, Outcome::Applied { .. }) {
+            *auto_count += 1;
         }
 
         Ok(result)
@@ -94,6 +91,12 @@ impl<'a> ImprovementExecutor<'a> {
         let blocklist_bypassed = self.cfg.self_improvement.blocklist
             .iter()
             .any(|b| candidate.context.contains(b.as_str()));
+
+        if !git_is_clean(self.repo_root)? {
+            return Ok(Outcome::Failed {
+                reason: "git working tree is dirty; cannot apply improvement".into(),
+            });
+        }
 
         let branch = branch_name(candidate, &self.cfg.self_improvement.branch_prefix);
         self.execute(candidate, &branch, true, blocklist_bypassed)
@@ -286,11 +289,12 @@ fn git_create_branch(repo_root: &Path, branch: &str) -> Result<()> {
 
 fn git_rollback(repo_root: &Path, original: &str, improve: &str) -> Result<()> {
     // CRITICAL ORDER: checkout original first, then delete branch
-    std::process::Command::new("git")
+    let status = std::process::Command::new("git")
         .args(["checkout", original])
         .current_dir(repo_root)
         .status()
         .context("git checkout (rollback)")?;
+    anyhow::ensure!(status.success(), "git checkout {} failed during rollback", original);
     std::process::Command::new("git")
         .args(["branch", "-D", improve])
         .current_dir(repo_root)
