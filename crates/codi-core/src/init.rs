@@ -120,7 +120,7 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
 /// Fill missing keys from `defaults` into `existing`, recursing into tables.
 /// Returns (merged, count_of_keys_added).
 /// Existing values are never overwritten.
-pub fn fill_defaults(existing: toml::Value, defaults: toml::Value) -> (toml::Value, usize) {
+pub(crate) fn fill_defaults(existing: toml::Value, defaults: toml::Value) -> (toml::Value, usize) {
     match (existing, defaults) {
         (toml::Value::Table(mut ex_t), toml::Value::Table(def_t)) => {
             let mut added = 0usize;
@@ -143,7 +143,7 @@ pub fn fill_defaults(existing: toml::Value, defaults: toml::Value) -> (toml::Val
     }
 }
 
-pub fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
+pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
     let path = repo_root.join(".mcp.json");
 
     if !path.exists() {
@@ -192,16 +192,15 @@ pub fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
 }
 
 fn register_mcp_claude() {
-    let claude_found = std::process::Command::new("claude")
+    let probe = std::process::Command::new("claude")
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok();
+        .status();
 
-    if !claude_found {
-        println!("  [ℹ] MCP kaydı atlandı — claude CLI yüklü değil.");
-        println!("      Manuel kayıt: claude mcp add codi -- codi mcp");
+    if matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        println!("  [\u{2139}] MCP kayd\u{0131} atland\u{0131} \u{2014} claude CLI y\u{00fc}kl\u{00fc} de\u{011f}il.");
+        println!("      Manuel kay\u{0131}t: claude mcp add codi -- codi mcp");
         return;
     }
 
@@ -343,5 +342,30 @@ api_key = ""
         let content = std::fs::read_to_string(&path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(json["mcpServers"]["codi"].is_object());
+    }
+
+    #[test]
+    fn ensure_mcp_json_handles_json_without_mcp_servers_key() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".mcp.json"), r#"{"version": 1}"#).unwrap();
+        ensure_mcp_json(dir.path()).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["mcpServers"]["codi"]["command"].as_str(), Some("codi"));
+    }
+
+    #[test]
+    fn write_config_merge_overwrites_model_selection() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("codi.toml"), concat!(
+            "[model.local]\n",
+            "model = \"old-model\"\n",
+            "base_url = \"http://localhost:11434/v1\"\n",
+            "api_key = \"\"\n",
+        )).unwrap();
+        write_config(dir.path(), "http://localhost:11434/v1", "new-model", false).unwrap();
+        let content = std::fs::read_to_string(dir.path().join("codi.toml")).unwrap();
+        assert!(content.contains("new-model"), "model must be overwritten");
+        assert!(!content.contains("old-model"), "old model must not remain");
     }
 }
