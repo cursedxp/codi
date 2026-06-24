@@ -466,6 +466,78 @@ mod tests {
     }
 
     #[test]
+    fn rollback_restores_original_branch_and_deletes_improve_branch() {
+        let dir = tempdir().unwrap();
+        // Init repo with an actual file so we can commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+        std::fs::write(dir.path().join("README.md"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+
+        // Capture original branch name
+        let original_out = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(dir.path())
+            .output().unwrap();
+        let original = String::from_utf8_lossy(&original_out.stdout).trim().to_string();
+
+        // Create the improve branch
+        let improve_branch = "improve/test-branch";
+        std::process::Command::new("git")
+            .args(["checkout", "-b", improve_branch])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+
+        // Execute rollback via the module's private helper
+        git_rollback(dir.path(), &original, improve_branch).unwrap();
+
+        // Assert we are back on the original branch
+        let current_out = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(dir.path())
+            .output().unwrap();
+        let current = String::from_utf8_lossy(&current_out.stdout).trim().to_string();
+        assert_eq!(current, original, "should be back on the original branch");
+
+        // Assert the improve branch no longer exists
+        let list_out = std::process::Command::new("git")
+            .args(["branch", "--list", improve_branch])
+            .current_dir(dir.path())
+            .output().unwrap();
+        let listed = String::from_utf8_lossy(&list_out.stdout).trim().to_string();
+        assert!(listed.is_empty(), "improve branch should have been deleted");
+    }
+
+    #[test]
     fn append_log_creates_file_and_appends_jsonl() {
         let dir = tempdir().unwrap();
         let entry = LogEntry {

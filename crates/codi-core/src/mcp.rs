@@ -279,11 +279,21 @@ fn tool_approve(cfg: &Config, repo_root: &Path, args: &Value) -> Result<Value> {
 
     let text = match &outcome {
         crate::improve::Outcome::Applied { branch } =>
-            format!("{{\"outcome\":\"Applied\",\"branch\":\"{branch}\",\"tests_passed\":true}}"),
+            serde_json::to_string(&serde_json::json!({
+                "outcome": "Applied",
+                "branch": branch,
+                "tests_passed": true
+            })).unwrap_or_else(|_| r#"{"outcome":"Applied"}"#.to_string()),
         crate::improve::Outcome::Failed { reason } =>
-            format!("{{\"outcome\":\"Failed\",\"reason\":\"{reason}\"}}"),
+            serde_json::to_string(&serde_json::json!({
+                "outcome": "Failed",
+                "reason": reason
+            })).unwrap_or_else(|_| r#"{"outcome":"Failed"}"#.to_string()),
         crate::improve::Outcome::Skipped { reason } =>
-            format!("{{\"outcome\":\"Skipped\",\"reason\":\"{reason}\"}}"),
+            serde_json::to_string(&serde_json::json!({
+                "outcome": "Skipped",
+                "reason": reason
+            })).unwrap_or_else(|_| r#"{"outcome":"Skipped"}"#.to_string()),
     };
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
@@ -305,7 +315,7 @@ fn tool_dismiss(repo_root: &Path, args: &Value) -> Result<Value> {
         branch: String::new(),
         outcome: "Dismissed".to_string(),
         reason,
-        approved_by_claude: true,
+        approved_by_claude: false,
         blocklist_bypassed: false,
         source_signals: candidate.source_signals,
         created_at: candidate.created_at,

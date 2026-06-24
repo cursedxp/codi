@@ -129,7 +129,7 @@ fn signal_to_candidate(
             Some(ImprovementCandidate {
                 id,
                 description,
-                risk: RiskLevel::High,
+                risk: RiskLevel::Low,
                 risk_reason: "no test file in diff — auto-apply blocked; needs review"
                     .to_string(),
                 source_signals: vec![signal.clone()],
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_without_test_is_always_high_risk() {
+    fn diff_without_test_is_low_risk() {
         let set = set_of(vec![SignalKind::DiffWithoutTest]);
         let candidates = classify(
             &set,
@@ -320,7 +320,7 @@ mod tests {
             &["crates/codi-core/src/review.rs".to_string()],
         );
         assert_eq!(candidates.len(), 1);
-        assert!(matches!(candidates[0].risk, RiskLevel::High));
+        assert!(matches!(candidates[0].risk, RiskLevel::Low));
         assert!(candidates[0].risk_reason.contains("no test"));
     }
 
