@@ -58,9 +58,10 @@ const KNOWN_CODING_MODELS: &[&str] = &[
 
 fn is_known_coding(name: &str) -> bool {
     let lower = name.to_lowercase();
+    // Match exact name (e.g. "qwen2.5:7b") or dash-variant (e.g. "qwen2.5:7b-q4_K_M").
     KNOWN_CODING_MODELS
         .iter()
-        .any(|k| lower == *k || lower.starts_with(&format!("{k}:")))
+        .any(|k| lower == *k || lower.starts_with(&format!("{k}-")))
         || lower.contains("coder")
         || lower.contains("code")
         || lower.contains("codestral")
@@ -76,6 +77,14 @@ fn is_known_coding(name: &str) -> bool {
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
+/// Strip trailing `/v1` and slashes so we can append `/api/tags` on the root.
+fn ollama_root(base_url: &str) -> String {
+    base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .to_string()
+}
+
 #[derive(Deserialize)]
 struct TagsResponse {
     models: Vec<TagModel>,
@@ -89,11 +98,7 @@ struct TagModel {
 
 /// Return true if Ollama is reachable at `base_url`.
 pub fn is_running(base_url: &str) -> bool {
-    // Strip /v1 suffix if present — Ollama's /api/tags lives at the root.
-    let root = base_url
-        .trim_end_matches('/')
-        .trim_end_matches("/v1");
-    let url = format!("{root}/api/tags");
+    let url = format!("{}/api/tags", ollama_root(base_url));
     reqwest::blocking::get(&url)
         .map(|r| r.status().is_success())
         .unwrap_or(false)
@@ -101,10 +106,7 @@ pub fn is_running(base_url: &str) -> bool {
 
 /// List all models installed in Ollama, sorted by size descending.
 pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
-    let root = base_url
-        .trim_end_matches('/')
-        .trim_end_matches("/v1");
-    let url = format!("{root}/api/tags");
+    let url = format!("{}/api/tags", ollama_root(base_url));
 
     let resp: TagsResponse = reqwest::blocking::get(&url)
         .context("connecting to Ollama")?
@@ -130,6 +132,12 @@ pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
     });
 
     Ok(models)
+}
+
+/// Like `check_tool_calls` but returns the underlying error so callers can
+/// distinguish "Ollama unreachable" from "model doesn't support tool_calls".
+pub fn check_tool_calls_result(base_url: &str, model: &str) -> Result<bool> {
+    check_tool_calls_inner(base_url, model)
 }
 
 /// Send a minimal tool-calling request and check if the model returns a

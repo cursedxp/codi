@@ -1,164 +1,308 @@
 # codi — local-first AI coding agent
 
-`codi` is a Rust-native terminal coding agent that runs against a **small local LLM** (via any OpenAI-compatible endpoint, e.g. Ollama) with optional cloud escalation. It understands your repo via a local RAG index, can write and edit code, run tests and linters, and review its own diffs — all from the terminal.
+`codi` is a terminal AI coding agent that runs against a **local LLM** (Ollama or any OpenAI-compatible endpoint) with optional cloud escalation. It understands your repo via a local RAG index, writes and edits code, runs tests, reviews its own diffs — and integrates natively with Claude Code as an MCP server.
+
+```
+cd your-repo
+codi run "Add a validate_email() function with unit tests"
+```
 
 ## How it works
 
-```
-Open any repo → run codi → talk to an AI teammate that reads, writes, and runs code
-```
+`codi` drives [Block's Goose](https://github.com/block/goose) as its agent engine (subprocess), adding:
 
-`codi` drives [Block's Goose](https://github.com/block/goose) as its agent engine (via subprocess), so you get file read/write/patch, shell execution, and a full agent loop for free. `codi` adds:
+- **Local-first defaults** — Ollama endpoint, no cloud keys required on first use.
+- **First-launch wizard** — detects Ollama, lists installed models, lets you pick one.
+- **Hybrid RAG** — BM25 full-text search (+ optional embeddings) over your repo.
+- **Routing policy** — keep tasks local, or let `hybrid` mode escalate complex ones to cloud.
+- **Self-review** — after a task, `codi review` gives a structured diff review from the model.
+- **Claude Code MCP integration** — expose `run_task / get_diff / run_tests` as native tools so Claude Code can orchestrate the implement → review → fix loop automatically.
 
-- **Local-first defaults** — points Goose at your Ollama endpoint, no cloud keys required.
-- **Hybrid RAG** — BM25 full-text search (+ optional embedding similarity) over your repo, served as a Goose MCP extension.
-- **Routing policy** — keep everything local, or let `hybrid` mode escalate complex tasks to a cloud model.
-- **Self-review** — after a task completes, run `codi review` to get a structured diff review from the local model.
+---
 
 ## Prerequisites
 
-1. **Rust** — `rustup` ≥ 1.82.
-2. **Goose** — install Block's Goose and ensure `goose` is on your PATH:
-   ```
-   brew tap block/goose
-   brew install goose
-   # or:
-   curl -fsSL https://github.com/block/goose/releases/latest/download/install.sh | sh
-   ```
-3. **Ollama** (recommended for local model):
-   ```
-   brew install ollama
-   ollama pull qwen2.5-coder:7b
-   ollama serve   # in a background terminal
-   ```
+| Tool | Install |
+|------|---------|
+| Rust ≥ 1.82 | `curl https://sh.rustup.rs -sSf \| sh` |
+| Goose (Block) | `brew install block-goose-cli` |
+| Ollama | `brew install ollama` |
 
-## Build
+Pull a model that supports structured tool calls (required for Goose):
 
+```bash
+ollama pull qwen2.5:7b      # recommended — reliable tool-call support
+# or: llama3.1:8b, mistral:7b, phi4-mini:3.8b
+ollama serve                 # keep running in a background terminal
 ```
-git clone https://github.com/your-org/codi
+
+> **Model compatibility:** `qwen2.5-coder:7b` does NOT work with Goose (returns tool calls as text). Use `qwen2.5:7b` instead. Run `codi model check <name>` to verify any model.
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/anilozsoy/codi
 cd codi
-cargo build --release
-# Binary at target/release/codi — copy it anywhere on PATH:
-cp target/release/codi ~/.local/bin/codi
-# Also build the RAG MCP server:
-cp target/release/codi-rag ~/.local/bin/codi-rag
+cargo install --path crates/codi-cli   # installs `codi` to ~/.cargo/bin
+cargo install --path crates/codi-rag   # installs `codi-rag` MCP server
 ```
+
+---
 
 ## Quick start
 
-```
+```bash
 cd your-project
-cp /path/to/codi/codi.toml .
-# Edit codi.toml to match your project's test/lint commands
 
-# 1. Index the repo (fast, incremental)
-codi index
-
-# 2a. Interactive REPL
+# First launch: wizard detects Ollama, lists models, you pick one → writes codi.toml
 codi
 
-# 2b. One-shot task
+# One-shot task
 codi run "Add a validate_email() function with unit tests"
 
-# 2c. One-shot with self-review
+# One-shot with automatic self-review
 codi run --review "Refactor error handling in src/db.rs to use anyhow"
 
-# 3. Review recent changes
+# Interactive REPL
+codi
+
+# Review the current git diff
 codi review
 
-# 4. Show resolved config
+# Show resolved config
 codi config
 ```
 
+---
+
+## Model management
+
+```bash
+# List all models installed in Ollama with tool-call compatibility info
+codi model list
+
+# Interactively pick a different model (updates codi.toml)
+codi model pick
+
+# Set a model directly
+codi model set qwen2.5:14b
+
+# Check if a model supports structured tool_calls (required for Goose)
+codi model check qwen2.5:7b
+```
+
+---
+
 ## Configuration
 
-`codi.toml` is read from the project root, merged over `~/.config/codi/config.toml`.
-See [`codi.toml`](./codi.toml) for the annotated example.
-
-### Key settings
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `model.local.base_url` | `http://localhost:11434/v1` | Ollama or any OpenAI-compatible endpoint |
-| `model.local.model` | `qwen2.5-coder:7b` | Model name to request |
-| `model.cloud.*` | unset | Optional cloud model (API key via env var) |
-| `routing.mode` | `local-only` | `local-only` / `hybrid` / `cloud-preferred` |
-| `commands.test` | unset | Command codi can run to execute tests |
-| `rag.embeddings` | `false` | Enable hybrid BM25 + vector retrieval |
-| `safety.confirm_commands` | `true` | Ask before running shell commands |
-
-### Unattended / CI mode
-
-```
-codi run -y "Run linter and fix all warnings"
-# or set in config:
-[safety]
-confirm_commands = false
-confirm_writes   = false
-```
-
-### Hybrid routing
+`codi.toml` in the project root is merged over `~/.config/codi/config.toml`.
 
 ```toml
-[model.cloud]
+[model.local]
+base_url = "http://localhost:11434/v1"
+model    = "qwen2.5:7b"
+api_key  = ""                          # not needed for Ollama
+
+[model.cloud]                          # optional — only used when routing escalates
 provider    = "anthropic"
 model       = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [routing]
-mode = "hybrid"
+mode = "local-only"                    # local-only | hybrid | cloud-preferred
+
+[commands]
+test   = "cargo test"
+lint   = "cargo clippy"
+build  = "cargo build"
+format = "cargo fmt"
+
+[rag]
+embeddings  = false                    # true → hybrid BM25 + vector retrieval
+embed_model = "nomic-embed-text"
+db_path     = ".codi/index.sqlite"
+
+[safety]
+confirm_commands = true                # set false for CI / unattended runs
+confirm_writes   = true
 ```
 
-With `hybrid`, simple tasks (short, keyword-simple) stay on the local model.
-Tasks containing words like "refactor", "architecture", "migration", or long descriptions
-are escalated to the cloud model.
+### Routing modes
 
-### Embedding-based hybrid RAG
+| Mode | Behaviour |
+|------|-----------|
+| `local-only` | Always use `model.local` |
+| `hybrid` | Local by default; escalates if task contains keywords like "refactor", "architecture", "migration" or is > 600 chars |
+| `cloud-preferred` | Use cloud when configured, fall back to local |
+
+### Unattended / CI mode
+
+```bash
+codi run -y "Run linter and fix all warnings"
+```
+
+or in `codi.toml`:
+
+```toml
+[safety]
+confirm_commands = false
+confirm_writes   = false
+```
+
+---
+
+## RAG index
+
+```bash
+# Build (or rebuild) the local BM25 index
+codi index
+codi index --rebuild
+
+# Enable hybrid retrieval (BM25 + cosine over embeddings)
+# requires: ollama pull nomic-embed-text
+```
+
+In `codi.toml`:
 
 ```toml
 [rag]
 embeddings  = true
-embed_model = "nomic-embed-text"   # must be available at model.local.base_url
+embed_model = "nomic-embed-text"
+include     = ["src/**", "docs/**", "**/*.md"]
+exclude     = ["target/**", "node_modules/**"]
 ```
 
-Requires the local endpoint to serve `/v1/embeddings`. Ollama supports this:
+---
+
+## Claude Code MCP integration
+
+`codi` can run as an MCP (Model Context Protocol) server, exposing three tools that Claude Code uses to orchestrate an **implement → review → fix** loop automatically.
+
+### Tools exposed
+
+| Tool | Description |
+|------|-------------|
+| `run_task(task)` | Implement a feature or fix using the local agent (Goose). Goose output streams to your terminal; JSON-RPC stream stays clean. |
+| `get_diff(base?)` | Return the current `git diff` for Claude Code to review inline. |
+| `run_tests()` | Run the configured test command and return output + exit code. |
+
+### Setup (one-time)
+
+```bash
+# Install codi (if not already done)
+cargo install --path crates/codi-cli
+
+# Register with Claude Code
+claude mcp add codi -- codi mcp
 ```
-ollama pull nomic-embed-text
+
+Alternatively, the `.mcp.json` file in this repo is picked up automatically when you open this project in Claude Code.
+
+### How the loop works
+
+Once registered, Claude Code can autonomously:
+
 ```
+You:         "Add rate-limiting to the API endpoints"
+
+Claude Code: [run_task] → "Add rate-limiting to the API endpoints"
+             (Goose implements — you see its output live in the terminal)
+
+             [get_diff] → reads the full diff
+             (Claude Code reviews inline with full context)
+
+             If issues found:
+             [run_task] → "Fix: rate limiter uses global state (thread-unsafe).
+                           Refactor to per-handler state with Arc<Mutex<...>>"
+
+             [run_tests] → verifies tests pass
+
+             Summary: "Rate limiting added and verified. 3 files changed."
+```
+
+You never need to copy-paste diff output or relay review comments manually — Claude Code handles the full loop.
+
+### Starting the server manually (debugging)
+
+```bash
+codi mcp
+# Speaks JSON-RPC 2.0 on stdin/stdout. Press Ctrl-C to stop.
+```
+
+---
 
 ## Project structure
 
 ```
 crates/
-  codi-cli/         # thin clap CLI binary (`codi`)
-  codi-core/        # config, routing, engine launch, self-review
-  codi-rag/         # MCP server: index/search (BM25 + optional embeddings)
-  codi-mock-server/ # OpenAI-compatible mock for offline tests
+  codi-cli/         # thin clap CLI binary (codi)
+  codi-core/        # config, routing, engine launch, self-review, MCP server
+  codi-rag/         # standalone MCP server: BM25 index + optional embeddings
+  codi-mock-server/ # OpenAI-compatible mock for offline/hermetic tests
+.mcp.json           # Claude Code MCP registration (project-scoped)
+codi.toml           # sample project config with annotations
 ```
 
-## Running tests
-
-```
-cargo test           # all unit + integration tests (no model/network needed)
-cargo test -p codi-core   # just core logic
-cargo test -p codi-rag    # just RAG: BM25, chunking, RRF, embeddings
-```
-
-## Examples
-
-- [`examples/rust-feature.md`](examples/rust-feature.md) — adding a feature to a Rust project
-- [`examples/typescript-feature.md`](examples/typescript-feature.md) — working on a TypeScript/Node project
-
-## Architecture
+### Architecture
 
 ```
 codi run "task"
   │
-  ├─ codi-core: load codi.toml, pick provider (routing.rs)
-  ├─ codi-core: generate session Goose config + register codi-rag MCP ext
-  ├─ codi-rag:  index_repo / search_context (BM25 + optional embeddings)
-  ├─ codi-core: inject top snippets into system prompt
+  ├─ codi-core: load codi.toml, pick provider (routing)
+  ├─ codi-core: generate session Goose YAML config
+  ├─ codi-rag:  MCP extension → search_context (BM25 + optional embeddings)
   ├─ goose (subprocess): agent loop
-  │     model ←→ file read/write/patch, execute_command
-  └─ codi-core: git diff → review.rs → self-review (optional)
+  │     model ←→ read_file / write_file / edit_file / execute_command
+  └─ codi-core: git diff → review.rs (optional self-review)
+
+codi mcp  [MCP server mode for Claude Code]
+  │
+  ├─ run_task   → run_session_mcp (goose stdout → stderr, JSON-RPC clean)
+  ├─ get_diff   → git diff HEAD
+  └─ run_tests  → cfg.commands.test
 ```
+
+---
+
+## Running tests
+
+```bash
+cargo test                    # all tests — no model or network needed
+cargo test -p codi-core       # config, routing, engine integration
+cargo test -p codi-rag        # BM25, chunking, RRF, embeddings
+```
+
+---
+
+## Examples
+
+- [`examples/rust-feature.md`](examples/rust-feature.md) — adding a feature to a Rust project
+- [`examples/typescript-feature.md`](examples/typescript-feature.md) — TypeScript/Node workflow
+
+---
+
+## Troubleshooting
+
+**`goose` not found**
+Make sure Goose is installed and on PATH: `which goose`. Install with `brew install block-goose-cli`.
+
+**Model doesn't respond / tool calls don't work**
+Run `codi model check <name>` to verify. Use `qwen2.5:7b` or `llama3.1:8b` — not `qwen2.5-coder:7b`.
+
+**Wizard appears unexpectedly in CI**
+In headless environments (no HOME dir), the wizard is suppressed automatically. If it still appears, create a minimal `codi.toml`:
+```toml
+[model.local]
+model = "qwen2.5:7b"
+```
+
+**MCP server not showing in Claude Code**
+Run `claude mcp add codi -- codi mcp` and restart Claude Code. Or check `.mcp.json` is in the project root.
+
+---
+
+## License
+
+Apache 2.0 — same as [Block's Goose](https://github.com/block/goose), which this project drives as a subprocess.

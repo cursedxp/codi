@@ -199,6 +199,61 @@ fn set_env_from_yaml_if_needed(cmd: &mut std::process::Command, yaml_path: &Path
     }
 }
 
+/// Like `run_session` but for MCP server mode: Goose's stdout is piped to our
+/// stderr so the JSON-RPC stdout stream isn't corrupted. The user still sees
+/// Goose's live output on their terminal via stderr.
+pub fn run_session_mcp(
+    cfg: &Config,
+    task: &str,
+    rag_socket: Option<&str>,
+    repo_root: &Path,
+    context_snippets: &str,
+) -> Result<i32> {
+    let goose_bin = locate_goose(cfg)?;
+    let provider = pick_provider(cfg, task);
+
+    let session_dir = repo_root.join(".codi").join("session");
+    std::fs::create_dir_all(&session_dir).context("creating .codi/session/ dir")?;
+
+    let goose_cfg_path = session_dir.join("goose-session.yaml");
+    let goose_cfg = build_goose_config(&cfg.safety, &provider, rag_socket, context_snippets);
+    std::fs::write(&goose_cfg_path, &goose_cfg).context("writing session goose config")?;
+
+    let mut cmd = std::process::Command::new(&goose_bin);
+    cmd.current_dir(repo_root);
+    set_env_from_yaml_if_needed(&mut cmd, &goose_cfg_path);
+    cmd.args(["run", "--text", task]);
+    // Pipe goose stdout → a thread that echoes it to our stderr.
+    // This keeps the MCP JSON-RPC stream on stdout clean.
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    tracing::debug!(
+        goose_bin = %goose_bin.display(),
+        "launching goose (mcp mode)"
+    );
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to execute goose at {}", goose_bin.display()))?;
+
+    if let Some(goose_stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(goose_stdout).lines().flatten() {
+                eprintln!("{line}");
+            }
+        });
+    }
+
+    let status = child
+        .wait()
+        .with_context(|| format!("waiting for goose at {}", goose_bin.display()))?;
+
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Generate a description of what `provider` is, for display to the user.
 pub fn provider_label(provider: &Provider) -> String {
     match provider {

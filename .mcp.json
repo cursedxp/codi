@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codi": {
+      "command": "codi",
+      "args": ["mcp"],
+      "type": "stdio"
+    }
+  }
+}

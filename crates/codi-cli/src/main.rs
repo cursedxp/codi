@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 use codi_core::{
     config::Config,
     engine::{pick_provider_label, run_session, SessionMode},
+    mcp,
     review::run_review,
     setup::{
         check_model, first_launch_wizard, is_first_launch, list_available_models, set_model,
@@ -27,6 +28,10 @@ struct Cli {
     /// Skip all confirmation prompts.
     #[arg(long, short = 'y', global = true)]
     yes: bool,
+
+    /// Deprecated: accepted but ignored for backwards compatibility.
+    #[arg(long, global = true, hide = true)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -61,6 +66,8 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ModelCmd>,
     },
+    /// Start the MCP stdio server (used by Claude Code and other MCP clients).
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -96,14 +103,20 @@ fn main() -> Result<()> {
 
     // ── First-launch: no config anywhere → run the wizard ───────────────────
     if is_first_launch(&repo_root) {
-        // Skip wizard only if the user is running `codi model` explicitly.
-        let is_model_cmd = matches!(&cli.command, Some(Cmd::Model { .. }));
-        if !is_model_cmd {
-            first_launch_wizard(&repo_root)?;
+        // Skip wizard for non-interactive subcommands.
+        let skip = matches!(&cli.command, Some(Cmd::Model { .. }) | Some(Cmd::Mcp));
+        if !skip {
+            if let Err(e) = first_launch_wizard(&repo_root) {
+                // User cancelled intentionally — exit cleanly.
+                if e.to_string().contains("cancelled") {
+                    return Ok(());
+                }
+                return Err(e);
+            }
         }
     }
 
-    let mut cfg = Config::load(&repo_root).unwrap_or_default();
+    let mut cfg = Config::load(&repo_root)?;
     if cli.yes {
         cfg.safety.confirm_commands = false;
         cfg.safety.confirm_writes = false;
@@ -127,6 +140,10 @@ fn main() -> Result<()> {
         }
         Some(Cmd::Model { action }) => {
             cmd_model(&cfg, &repo_root, action)?;
+        }
+        Some(Cmd::Mcp) => {
+            // Skip the first-launch wizard check — MCP mode must be non-interactive.
+            mcp::serve(&cfg, &repo_root)?;
         }
     }
 
@@ -180,7 +197,11 @@ fn cmd_run(cfg: &Config, repo_root: &std::path::Path, task: &str, review: bool) 
     }
     if review {
         println!("\n--- Self-review ---");
-        run_review(cfg, repo_root, false)?;
+        let result = run_review(cfg, repo_root, false)?;
+        if result.exit_code != 0 {
+            eprintln!("review exited with code {}", result.exit_code);
+            std::process::exit(result.exit_code);
+        }
     }
     Ok(())
 }
@@ -229,7 +250,7 @@ fn cmd_model(
             set_model(repo_root, Some(&name))?;
         }
         Some(ModelCmd::Check { name }) => {
-            check_model(base_url, &name);
+            check_model(base_url, &name)?;
         }
     }
     Ok(())
