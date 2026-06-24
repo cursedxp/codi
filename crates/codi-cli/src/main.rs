@@ -8,6 +8,9 @@ use codi_core::{
     config::Config,
     engine::{pick_provider_label, run_session, SessionMode},
     review::run_review,
+    setup::{
+        check_model, first_launch_wizard, is_first_launch, list_available_models, set_model,
+    },
 };
 
 #[derive(Parser)]
@@ -20,10 +23,6 @@ struct Cli {
     /// Repository root (defaults to current directory).
     #[arg(long, global = true)]
     repo: Option<PathBuf>,
-
-    /// Config file (defaults to ./codi.toml then ~/.config/codi/config.toml).
-    #[arg(long, global = true)]
-    config: Option<PathBuf>,
 
     /// Skip all confirmation prompts.
     #[arg(long, short = 'y', global = true)]
@@ -57,6 +56,29 @@ enum Cmd {
     },
     /// Show the resolved configuration (merged repo + user level).
     Config,
+    /// View or change the active model.
+    Model {
+        #[command(subcommand)]
+        action: Option<ModelCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelCmd {
+    /// List all models installed in Ollama with compatibility info.
+    List,
+    /// Interactively pick a model (same as `codi model` with no subcommand).
+    Pick,
+    /// Set the model directly without the interactive picker.
+    Set {
+        /// Model name, e.g. qwen2.5:14b
+        name: String,
+    },
+    /// Check whether a model supports structured tool_calls.
+    Check {
+        /// Model name to test.
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -72,7 +94,16 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let repo_root = repo_root.canonicalize().context("resolving repo root")?;
 
-    let mut cfg = Config::load(&repo_root).context("loading codi config")?;
+    // ── First-launch: no config anywhere → run the wizard ───────────────────
+    if is_first_launch(&repo_root) {
+        // Skip wizard only if the user is running `codi model` explicitly.
+        let is_model_cmd = matches!(&cli.command, Some(Cmd::Model { .. }));
+        if !is_model_cmd {
+            first_launch_wizard(&repo_root)?;
+        }
+    }
+
+    let mut cfg = Config::load(&repo_root).unwrap_or_default();
     if cli.yes {
         cfg.safety.confirm_commands = false;
         cfg.safety.confirm_writes = false;
@@ -80,7 +111,6 @@ fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // Default: interactive REPL.
             run_interactive(&cfg, &repo_root)?;
         }
         Some(Cmd::Run { task, review }) => {
@@ -95,10 +125,15 @@ fn main() -> Result<()> {
         Some(Cmd::Config) => {
             cmd_show_config(&cfg)?;
         }
+        Some(Cmd::Model { action }) => {
+            cmd_model(&cfg, &repo_root, action)?;
+        }
     }
 
     Ok(())
 }
+
+// ── Subcommand implementations ───────────────────────────────────────────────
 
 fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
     println!(
@@ -108,7 +143,6 @@ fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
     );
     println!("Type your task and press Enter. Ctrl-C to exit.\n");
 
-    // Use rustyline for a basic REPL with history.
     let mut rl = rustyline::DefaultEditor::new().context("init readline")?;
     loop {
         let line = match rl.readline("codi> ") {
@@ -122,9 +156,8 @@ fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
             continue;
         }
         let _ = rl.add_history_entry(task);
-
-        // Launch a one-shot Goose session for this task; loop for next task.
-        let code = run_session(cfg, task, SessionMode::OneShot(task.to_string()), None, repo_root, "")?;
+        let code =
+            run_session(cfg, task, SessionMode::OneShot(task.to_string()), None, repo_root, "")?;
         if code != 0 {
             eprintln!("goose exited with code {code}");
         }
@@ -134,40 +167,30 @@ fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
 
 fn cmd_run(cfg: &Config, repo_root: &std::path::Path, task: &str, review: bool) -> Result<()> {
     println!("Provider: {}", pick_provider_label(cfg, task));
-
-    // TODO M3: call codi-rag to retrieve snippets and pass as context_snippets
-    let context_snippets = "";
-
     let code = run_session(
         cfg,
         task,
         SessionMode::OneShot(task.to_string()),
         None,
         repo_root,
-        context_snippets,
+        "",
     )?;
-
     if code != 0 {
         eprintln!("goose exited with code {code}");
     }
-
     if review {
         println!("\n--- Self-review ---");
-        let result = run_review(cfg, repo_root, false)?;
-        println!("Review exit code: {}", result.exit_code);
+        run_review(cfg, repo_root, false)?;
     }
-
     Ok(())
 }
 
 fn cmd_index(cfg: &Config, repo_root: &std::path::Path, rebuild: bool) -> Result<()> {
-    // TODO M3: call codi-rag to index the repo.
     let db = repo_root.join(&cfg.rag.db_path);
     if rebuild && db.exists() {
         std::fs::remove_file(&db).context("removing old index")?;
     }
-    println!("Indexing {} → {} (BM25)", repo_root.display(), db.display());
-    println!("(RAG indexer not yet wired — coming in M3)");
+    println!("Indexing {} → {} (RAG not yet wired in M3+)", repo_root.display(), db.display());
     Ok(())
 }
 
@@ -182,7 +205,32 @@ fn cmd_review(cfg: &Config, repo_root: &std::path::Path, refine: bool) -> Result
 }
 
 fn cmd_show_config(cfg: &Config) -> Result<()> {
-    let s = cfg.to_toml().context("serializing config")?;
-    println!("{s}");
+    println!("{}", cfg.to_toml().context("serializing config")?);
+    Ok(())
+}
+
+fn cmd_model(
+    cfg: &Config,
+    repo_root: &std::path::Path,
+    action: Option<ModelCmd>,
+) -> Result<()> {
+    let base_url = &cfg.model.local.base_url;
+
+    match action {
+        // `codi model` or `codi model pick` → interactive picker
+        None | Some(ModelCmd::Pick) => {
+            println!("Current model: {}\n", cfg.model.local.model);
+            set_model(repo_root, None)?;
+        }
+        Some(ModelCmd::List) => {
+            list_available_models(base_url)?;
+        }
+        Some(ModelCmd::Set { name }) => {
+            set_model(repo_root, Some(&name))?;
+        }
+        Some(ModelCmd::Check { name }) => {
+            check_model(base_url, &name);
+        }
+    }
     Ok(())
 }
