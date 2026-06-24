@@ -170,4 +170,12 @@ fn engine_passes_system_standards_to_goose() {
         args.contains("Simplicity First"),
         "system arg should contain Karpathy rule 2, got: {args}"
     );
+    assert!(
+        args.contains("Surgical Changes"),
+        "system arg should contain Karpathy rule 3, got: {args}"
+    );
+    assert!(
+        args.contains("Goal-Driven Execution"),
+        "system arg should contain Karpathy rule 4, got: {args}"
+    );
 }
