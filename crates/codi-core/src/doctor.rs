@@ -17,6 +17,7 @@ pub enum CheckId {
     McpJson,
     McpRegistration,
     SelfImprovement,
+    ClaudeMd,
 }
 
 pub struct CheckResult {
@@ -137,6 +138,9 @@ pub fn run_doctor(repo_root: &Path) -> Result<Vec<CheckResult>> {
         }
     }
 
+    // [7] CLAUDE.md
+    checks.push(check_claude_md(repo_root));
+
     Ok(checks)
 }
 
@@ -174,6 +178,18 @@ pub fn run_doctor_fix(repo_root: &Path) -> Result<Vec<CheckResult>> {
                     check.suggestion = None;
                 } else {
                     check.detail = format!("{} (d\u{00fc}zeltme ba\u{015f}ar\u{0131}s\u{0131}z)", check.detail);
+                }
+            }
+            CheckId::ClaudeMd => {
+                match crate::init::ensure_claude_md(repo_root) {
+                    Ok(()) => {
+                        check.severity = Severity::Ok;
+                        check.detail = "d\u{00fc}zeltildi".to_string();
+                        check.suggestion = None;
+                    }
+                    Err(e) => {
+                        check.detail = format!("d\u{00fc}zeltme ba\u{015f}ar\u{0131}s\u{0131}z: {e:#}");
+                    }
                 }
             }
             _ => {}
@@ -345,6 +361,40 @@ fn check_claude_mcp_registration() -> CheckResult {
     }
 }
 
+fn check_claude_md(repo_root: &Path) -> CheckResult {
+    let path = repo_root.join("CLAUDE.md");
+    if !path.exists() {
+        return CheckResult {
+            id: CheckId::ClaudeMd,
+            name: "CLAUDE.md",
+            severity: Severity::Error,
+            detail: "dosya yok".to_string(),
+            suggestion: Some("codi doctor --fix".to_string()),
+            fixable: true,
+        };
+    }
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    if content.contains("## codi") {
+        CheckResult {
+            id: CheckId::ClaudeMd,
+            name: "CLAUDE.md",
+            severity: Severity::Ok,
+            detail: "codi delegasyon talimat\u{0131} mevcut".to_string(),
+            suggestion: None,
+            fixable: false,
+        }
+    } else {
+        CheckResult {
+            id: CheckId::ClaudeMd,
+            name: "CLAUDE.md",
+            severity: Severity::Error,
+            detail: "codi b\u{00f6}l\u{00fc}m\u{00fc} eksik".to_string(),
+            suggestion: Some("codi doctor --fix".to_string()),
+            fixable: true,
+        }
+    }
+}
+
 fn read_model_from_toml(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     let val: toml::Value = toml::from_str(&content).ok()?;
@@ -469,5 +519,43 @@ mod tests {
         let si_check = checks.iter().find(|c| c.id == CheckId::SelfImprovement)
             .expect("self_improvement check must be present when codi.toml has no [self_improvement] section");
         assert!(matches!(si_check.severity, Severity::Warning));
+    }
+
+    #[test]
+    fn check_claude_md_missing_returns_error() {
+        let dir = tempdir().unwrap();
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
+        assert!(matches!(c.severity, Severity::Error));
+        assert!(c.fixable);
+    }
+
+    #[test]
+    fn check_claude_md_without_codi_section_returns_error() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# My Project\n").unwrap();
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
+        assert!(matches!(c.severity, Severity::Error));
+        assert!(c.fixable);
+    }
+
+    #[test]
+    fn check_claude_md_with_codi_section_returns_ok() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# Project\n\n## codi\n\nContent.\n").unwrap();
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
+        assert!(matches!(c.severity, Severity::Ok));
+    }
+
+    #[test]
+    fn doctor_fix_creates_claude_md_and_marks_ok() {
+        let dir = tempdir().unwrap();
+        let checks = run_doctor_fix(dir.path()).unwrap();
+        assert!(dir.path().join("CLAUDE.md").exists(), "CLAUDE.md must be created");
+        let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd)
+            .expect("ClaudeMd check must be present");
+        assert!(matches!(c.severity, Severity::Ok), "severity must be Ok after fix");
     }
 }
