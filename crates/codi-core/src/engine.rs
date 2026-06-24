@@ -173,6 +173,7 @@ fn build_command(
         SessionMode::OneShot(task) => {
             // `goose run --text "<task>"` runs non-interactively.
             cmd.args(["run", "--text", task]);
+            cmd.arg("--system").arg(crate::standards::CODING_STANDARDS);
             cmd.stdin(Stdio::null())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
@@ -223,6 +224,7 @@ pub fn run_session_mcp(
     cmd.current_dir(repo_root);
     set_env_from_yaml_if_needed(&mut cmd, &goose_cfg_path);
     cmd.args(["run", "--text", task]);
+    cmd.arg("--system").arg(crate::standards::CODING_STANDARDS);
     // Pipe goose stdout → a thread that echoes it to our stderr.
     // This keeps the MCP JSON-RPC stream on stdout clean.
     cmd.stdin(Stdio::null())

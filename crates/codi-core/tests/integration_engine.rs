@@ -17,7 +17,10 @@ fn fake_goose(dir: &std::path::Path) -> PathBuf {
     let mut f = std::fs::File::create(&path).unwrap();
     writeln!(
         f,
-        "#!/bin/sh\necho \"fake-goose: GOOSE_MODEL=$GOOSE_MODEL GOOSE_OPENAI_HOST=$GOOSE_OPENAI_HOST\"\nexit 0"
+        "#!/bin/sh\n\
+         echo \"fake-goose: GOOSE_MODEL=$GOOSE_MODEL GOOSE_OPENAI_HOST=$GOOSE_OPENAI_HOST\"\n\
+         echo \"fake-goose-args: $@\"\n\
+         exit 0"
     )
     .unwrap();
     #[cfg(unix)]
@@ -115,4 +118,56 @@ fn engine_fails_gracefully_when_goose_not_found() {
         "",
     );
     assert!(result.is_err(), "should error when goose binary not found");
+}
+
+#[test]
+fn engine_passes_system_standards_to_goose() {
+    let dir = tempfile::tempdir().unwrap();
+    let goose = fake_goose(dir.path());
+
+    // Capture fake-goose stdout so we can inspect args.
+    let goose_output_file = dir.path().join("goose-out.txt");
+    let script_path = goose.to_str().unwrap();
+    let out_path = goose_output_file.to_str().unwrap();
+
+    // Rewrite fake-goose to write args to a file for inspection.
+    std::fs::write(
+        &goose,
+        format!(
+            "#!/bin/sh\necho \"$@\" > {out_path}\nexit 0\n"
+        ),
+    ).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&goose, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut cfg = Config::default();
+    cfg.goose_bin = Some(script_path.to_string());
+    cfg.safety.confirm_commands = false;
+    cfg.safety.confirm_writes = false;
+
+    run_session(
+        &cfg,
+        "add a hello function",
+        SessionMode::OneShot("add a hello function".to_string()),
+        None,
+        dir.path(),
+        "",
+    ).unwrap();
+
+    let args = std::fs::read_to_string(&goose_output_file).unwrap();
+    assert!(
+        args.contains("--system"),
+        "goose should be called with --system flag, got: {args}"
+    );
+    assert!(
+        args.contains("Think Before Coding"),
+        "system arg should contain Karpathy rule 1, got: {args}"
+    );
+    assert!(
+        args.contains("Simplicity First"),
+        "system arg should contain Karpathy rule 2, got: {args}"
+    );
 }
