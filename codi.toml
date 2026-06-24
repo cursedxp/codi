@@ -1,0 +1,70 @@
+# codi.toml — project-level configuration for the codi coding agent.
+# Place this file at the root of any project you want to work on.
+# Repo-level settings override the user-level ~/.config/codi/config.toml.
+
+# --------------------------------------------------------------------------
+# Model configuration
+# --------------------------------------------------------------------------
+
+[model.local]
+# OpenAI-compatible endpoint for the local model (e.g. Ollama, LM Studio).
+base_url = "http://localhost:11434/v1"
+model    = "qwen2.5-coder:7b"
+api_key  = ""                          # leave empty for Ollama
+
+# Optional: cloud model used only when routing escalates.
+# [model.cloud]
+# provider    = "anthropic"            # anthropic | openai | deepseek
+# model       = "claude-sonnet-4-5"
+# api_key_env = "ANTHROPIC_API_KEY"   # env var that holds the key
+
+# --------------------------------------------------------------------------
+# Routing
+# --------------------------------------------------------------------------
+
+[routing]
+# local-only     — always use the local model (default, fully offline)
+# hybrid         — use local by default; escalate complex tasks to cloud
+# cloud-preferred — prefer cloud when configured, fall back to local
+mode = "local-only"
+
+# --------------------------------------------------------------------------
+# Project commands
+# --------------------------------------------------------------------------
+
+[commands]
+test   = "cargo test"
+lint   = "cargo clippy"
+build  = "cargo build"
+format = "cargo fmt"
+
+# --------------------------------------------------------------------------
+# RAG (Repository-Aware Generation)
+# --------------------------------------------------------------------------
+
+[rag]
+# Glob patterns (relative to repo root) to include in the index.
+include = ["src/**", "docs/**", "README*", "**/*.md"]
+
+# Patterns to exclude (in addition to .gitignore).
+exclude = ["target/**", "node_modules/**", ".git/**", ".codi/**"]
+
+# File extensions to index (without the dot).
+extensions = ["rs", "ts", "tsx", "js", "jsx", "py", "go", "md", "toml", "yaml", "yml"]
+
+# Set to true to use embedding-based hybrid retrieval (requires an /embeddings endpoint).
+embeddings  = false
+embed_model = "nomic-embed-text"
+
+# Where the SQLite index lives (relative to repo root).
+db_path = ".codi/index.sqlite"
+
+# --------------------------------------------------------------------------
+# Safety
+# --------------------------------------------------------------------------
+
+[safety]
+# Ask before running shell commands or writing files.
+# Set to false for unattended / CI mode (or use `codi run -y <task>`).
+confirm_commands = true
+confirm_writes   = true

@@ -1,0 +1,6 @@
+/target
+**/target
+.codi/*.sqlite
+.codi/*.sqlite-*
+.codi/session/
+*.log

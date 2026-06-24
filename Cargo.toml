@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/codi-cli",
+    "crates/codi-core",
+    "crates/codi-rag",
+    "crates/codi-mock-server",
+]
+# NOTE: vendor/goose (the Goose fork) is intentionally NOT a workspace member.
+# `codi` drives the `goose` binary as a subprocess located at runtime, so our
+# crates build and test fast and hermetically without compiling Goose's tree.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/local/codi"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "fs", "signal", "time"] }
+axum = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+ignore = "0.4"
+globset = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "5"
+sha2 = "0.10"
+rustyline = "14"
+
+[profile.release]
+strip = true

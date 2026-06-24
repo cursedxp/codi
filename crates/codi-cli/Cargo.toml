@@ -1,0 +1,18 @@
+[package]
+name = "codi-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "codi"
+path = "src/main.rs"
+
+[dependencies]
+codi-core = { path = "../codi-core" }
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rustyline.workspace = true
