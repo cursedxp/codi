@@ -269,33 +269,6 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
 }
 
 fn check_claude_mcp_registration() -> CheckResult {
-    // Check if claude CLI is present
-    let spawn_result = std::process::Command::new("claude")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    let claude_found = match spawn_result {
-        Ok(mut child) => {
-            let _ = child.wait();
-            true
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(_) => true, // spawned but errored for other reason — binary exists
-    };
-
-    if !claude_found {
-        return CheckResult {
-            name: "MCP kaydı",
-            severity: Severity::Info,
-            detail: "claude CLI yüklü değil — MCP isteğe bağlı".to_string(),
-            suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
-            fixable: false,
-        };
-    }
-
-    // Check if codi is registered
     let output = std::process::Command::new("claude")
         .args(["mcp", "list"])
         .stdout(std::process::Stdio::piped())
@@ -303,6 +276,20 @@ fn check_claude_mcp_registration() -> CheckResult {
         .output();
 
     match output {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => CheckResult {
+            name: "MCP kaydı",
+            severity: Severity::Info,
+            detail: "claude CLI yüklü değil — MCP isteğe bağlı".to_string(),
+            suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
+            fixable: false,
+        },
+        Err(_) => CheckResult {
+            name: "MCP kaydı",
+            severity: Severity::Info,
+            detail: "kontrol edilemedi".to_string(),
+            suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
+            fixable: false,
+        },
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if stdout.contains("codi") {
@@ -323,13 +310,6 @@ fn check_claude_mcp_registration() -> CheckResult {
                 }
             }
         }
-        Err(_) => CheckResult {
-            name: "MCP kaydı",
-            severity: Severity::Info,
-            detail: "kontrol edilemedi".to_string(),
-            suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
-            fixable: false,
-        },
     }
 }
 
@@ -429,12 +409,10 @@ mod tests {
     #[test]
     fn self_improvement_absent_is_warning_not_error() {
         let dir = tempdir().unwrap();
-        // codi.toml without [self_improvement]
         init_toml(dir.path(), "qwen2.5:7b");
         let checks = run_doctor(dir.path()).unwrap();
-        let si_check = checks.iter().find(|c| c.name == "self_improvement");
-        if let Some(c) = si_check {
-            assert!(matches!(c.severity, Severity::Warning));
-        }
+        let si_check = checks.iter().find(|c| c.name == "self_improvement")
+            .expect("self_improvement check must be present when codi.toml has no [self_improvement] section");
+        assert!(matches!(si_check.severity, Severity::Warning));
     }
 }
