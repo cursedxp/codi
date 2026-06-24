@@ -98,10 +98,15 @@ fn build_goose_config(
     context_snippets: &str,
 ) -> String {
     let provider_section = match provider {
-        Provider::Local(m) => format!(
-            "GOOSE_PROVIDER: openai\nGOOSE_OPENAI_HOST: {}\nGOOSE_MODEL: {}\nGOOSE_API_KEY: {}\n",
-            m.base_url, m.model, m.api_key
-        ),
+        Provider::Local(m) => {
+            // Goose reads OPENAI_BASE_URL for custom endpoints; OPENAI_API_KEY
+            // is required but can be any non-empty string for Ollama.
+            let key = if m.api_key.is_empty() { "ollama".to_string() } else { m.api_key.clone() };
+            format!(
+                "GOOSE_PROVIDER: openai\nOPENAI_BASE_URL: {}\nGOOSE_MODEL: {}\nOPENAI_API_KEY: {}\n",
+                m.base_url, m.model, key
+            )
+        }
         Provider::Cloud(m) => {
             let api_key_val = std::env::var(&m.api_key_env).unwrap_or_default();
             match m.provider.as_str() {
@@ -110,8 +115,8 @@ fn build_goose_config(
                     m.model, api_key_val
                 ),
                 _ => format!(
-                    "GOOSE_PROVIDER: openai\nGOOSE_MODEL: {}\nGOOSE_API_KEY: {}\n",
-                    m.model, api_key_val
+                    "GOOSE_PROVIDER: openai\nOPENAI_BASE_URL: {}\nGOOSE_MODEL: {}\nOPENAI_API_KEY: {}\n",
+                    m.base_url.as_deref().unwrap_or("https://api.openai.com"), m.model, api_key_val
                 ),
             }
         }

@@ -9,7 +9,7 @@
 [model.local]
 # OpenAI-compatible endpoint for the local model (e.g. Ollama, LM Studio).
 base_url = "http://localhost:11434/v1"
-model    = "qwen2.5-coder:7b"
+model    = "qwen2.5:7b"          # must support OpenAI tool_calls; qwen2.5-coder does NOT
 api_key  = ""                          # leave empty for Ollama
 
 # Optional: cloud model used only when routing escalates.

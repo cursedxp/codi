@@ -67,7 +67,9 @@ impl Default for LocalModel {
     fn default() -> Self {
         LocalModel {
             base_url: "http://localhost:11434/v1".to_string(),
-            model: "qwen2.5-coder:7b".to_string(),
+            // qwen2.5:7b returns proper structured tool_calls via Ollama;
+            // qwen2.5-coder:7b returns tool calls as text (not compatible with Goose).
+            model: "qwen2.5:7b".to_string(),
             api_key: String::new(),
         }
     }
