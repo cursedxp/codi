@@ -111,7 +111,7 @@ pub fn run_doctor(repo_root: &Path) -> Result<Vec<CheckResult>> {
             checks.push(CheckResult {
                 name: "self_improvement",
                 severity: Severity::Warning,
-                detail: "config yok — varsayılan devre dışı".to_string(),
+                detail: "açıkça yapılandırılmamış — varsayılan değerler kullanılıyor".to_string(),
                 suggestion: Some("codi.toml'a [self_improvement] ekle".to_string()),
                 fixable: false,
             });

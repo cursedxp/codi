@@ -17,6 +17,7 @@ pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
         println!("✗ Ollama bulunamadı. Kur: brew install ollama && ollama serve");
         e
     })?;
+    println!("  ✓ Ollama çalışıyor ({})", base_url);
 
     // [2/5] Model
     println!("[2/5] Model seçimi");
@@ -79,7 +80,24 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
     let existing: toml::Value = toml::from_str(&existing_str).context("parsing codi.toml")?;
     let defaults: toml::Value = toml::Value::try_from(&fresh).context("serializing defaults")?;
 
-    let (merged, added) = fill_defaults(existing, defaults);
+    let (mut merged, added) = fill_defaults(existing, defaults);
+
+    // Overwrite model fields with the user-selected values (fill_defaults never overwrites,
+    // but we need to apply the new model selection even on re-runs).
+    if let toml::Value::Table(ref mut t) = merged {
+        let model_tbl = t
+            .entry("model".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        if let toml::Value::Table(ref mut mt) = model_tbl {
+            let local_tbl = mt
+                .entry("local".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            if let toml::Value::Table(ref mut lt) = local_tbl {
+                lt.insert("model".to_string(), toml::Value::String(model.to_string()));
+                lt.insert("base_url".to_string(), toml::Value::String(base_url.to_string()));
+            }
+        }
+    }
 
     // Validate merged result; surface unknown-field errors as warnings
     let merged_str = toml::to_string_pretty(&merged).context("serializing merged config")?;

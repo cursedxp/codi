@@ -167,7 +167,6 @@ pub fn detect_ollama() -> Result<String> {
     ];
     for url in candidates {
         if is_running(url) {
-            println!("✓ Ollama detected at {url}");
             return Ok(url.to_string());
         }
     }
