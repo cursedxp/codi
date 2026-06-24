@@ -6,6 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 use codi_core::{
     config::Config,
+    doctor::{print_doctor_report, run_doctor, run_doctor_fix},
     engine::{pick_provider_label, post_run_hook, run_session, SessionMode},
     mcp,
     review::run_review,
@@ -68,6 +69,12 @@ enum Cmd {
     },
     /// Start the MCP stdio server (used by Claude Code and other MCP clients).
     Mcp,
+    /// Run project health checks (and optionally auto-fix safe issues).
+    Doctor {
+        /// Auto-fix safe issues (e.g. missing .mcp.json).
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -104,7 +111,7 @@ fn main() -> Result<()> {
     // ── First-launch: no config anywhere → run the wizard ───────────────────
     if is_first_launch(&repo_root) {
         // Skip wizard for non-interactive subcommands.
-        let skip = matches!(&cli.command, Some(Cmd::Model { .. }) | Some(Cmd::Mcp));
+        let skip = matches!(&cli.command, Some(Cmd::Model { .. }) | Some(Cmd::Mcp) | Some(Cmd::Doctor { .. }));
         if !skip {
             if let Err(e) = first_launch_wizard(&repo_root) {
                 // User cancelled intentionally — exit cleanly.
@@ -144,6 +151,9 @@ fn main() -> Result<()> {
         Some(Cmd::Mcp) => {
             // Skip the first-launch wizard check — MCP mode must be non-interactive.
             mcp::serve(&cfg, &repo_root)?;
+        }
+        Some(Cmd::Doctor { fix }) => {
+            cmd_doctor(&repo_root, fix)?;
         }
     }
 
@@ -256,6 +266,19 @@ fn cmd_model(
         Some(ModelCmd::Check { name }) => {
             check_model(base_url, &name)?;
         }
+    }
+    Ok(())
+}
+
+fn cmd_doctor(repo_root: &std::path::Path, fix: bool) -> Result<()> {
+    let checks = if fix {
+        run_doctor_fix(repo_root)?
+    } else {
+        run_doctor(repo_root)?
+    };
+    let has_errors = print_doctor_report(&checks);
+    if has_errors {
+        std::process::exit(1);
     }
     Ok(())
 }

@@ -7,6 +7,7 @@
 //! - [`review`]: self-review of the agent's own diff.
 
 pub mod config;
+pub mod doctor;
 pub mod engine;
 pub mod improve;
 pub mod init;
