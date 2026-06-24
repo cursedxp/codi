@@ -8,11 +8,10 @@ use codi_core::{
     config::Config,
     doctor::{print_doctor_report, run_doctor, run_doctor_fix},
     engine::{pick_provider_label, post_run_hook, run_session, SessionMode},
+    init::run_init,
     mcp,
     review::run_review,
-    setup::{
-        check_model, first_launch_wizard, is_first_launch, list_available_models, set_model,
-    },
+    setup::{check_model, is_first_launch, list_available_models, set_model},
 };
 
 #[derive(Parser)]
@@ -75,6 +74,12 @@ enum Cmd {
         #[arg(long)]
         fix: bool,
     },
+    /// Set up this project for use with codi (one-time or re-run safely).
+    Init {
+        /// Overwrite codi.toml from scratch instead of merging.
+        #[arg(long)]
+        rewrite_config: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -108,18 +113,15 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let repo_root = repo_root.canonicalize().context("resolving repo root")?;
 
-    // ── First-launch: no config anywhere → run the wizard ───────────────────
+    // ── First-launch: no config → print onboarding prompt and exit ──────────
     if is_first_launch(&repo_root) {
-        // Skip wizard for non-interactive subcommands.
-        let skip = matches!(&cli.command, Some(Cmd::Model { .. }) | Some(Cmd::Mcp) | Some(Cmd::Doctor { .. }));
+        let skip = matches!(
+            &cli.command,
+            Some(Cmd::Model { .. }) | Some(Cmd::Mcp) | Some(Cmd::Doctor { .. }) | Some(Cmd::Init { .. })
+        );
         if !skip {
-            if let Err(e) = first_launch_wizard(&repo_root) {
-                // User cancelled intentionally — exit cleanly.
-                if e.to_string().contains("cancelled") {
-                    return Ok(());
-                }
-                return Err(e);
-            }
+            println!("Bu proje henüz yapılandırılmamış. Başlamak için:\n\n  codi init\n");
+            return Ok(());
         }
     }
 
@@ -154,6 +156,9 @@ fn main() -> Result<()> {
         }
         Some(Cmd::Doctor { fix }) => {
             cmd_doctor(&repo_root, fix)?;
+        }
+        Some(Cmd::Init { rewrite_config }) => {
+            run_init(&repo_root, rewrite_config)?;
         }
     }
 
