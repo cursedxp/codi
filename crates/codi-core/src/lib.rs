@@ -10,6 +10,7 @@ pub mod config;
 pub mod engine;
 pub mod mcp;
 pub mod ollama;
+pub mod pending;
 pub mod review;
 pub mod risk;
 pub mod routing;
