@@ -14,7 +14,7 @@ pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
     // [1/5] Ollama
     println!("[1/5] Ollama kontrolü");
     let base_url = detect_ollama().map_err(|e| {
-        eprintln!("✗ Ollama bulunamadı. Kur: brew install ollama && ollama serve");
+        println!("✗ Ollama bulunamadı. Kur: brew install ollama && ollama serve");
         e
     })?;
 
