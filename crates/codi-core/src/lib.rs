@@ -13,4 +13,5 @@ pub mod ollama;
 pub mod review;
 pub mod routing;
 pub mod setup;
+pub mod signals;
 pub mod standards;
