@@ -9,6 +9,7 @@
 pub mod config;
 pub mod engine;
 pub mod improve;
+pub mod init;
 pub mod mcp;
 pub mod ollama;
 pub mod pending;

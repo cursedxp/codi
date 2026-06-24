@@ -160,7 +160,7 @@ pub fn check_model(base_url: &str, model: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Detect Ollama at the default or configured URL. Returns the base_url.
-fn detect_ollama() -> Result<String> {
+pub fn detect_ollama() -> Result<String> {
     let candidates = [
         "http://localhost:11434/v1",
         "http://127.0.0.1:11434/v1",
