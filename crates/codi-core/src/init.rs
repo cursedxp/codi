@@ -5,35 +5,41 @@ use crate::setup::{detect_ollama, pick_model_interactive};
 
 const MCP_JSON_CONTENT: &str = "{\n  \"mcpServers\": {\n    \"codi\": {\n      \"command\": \"codi\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n";
 const CODI_MCP_KEY: &str = "codi";
+const CLAUDE_MD_MARKER: &str = "## codi";
+const CLAUDE_MD_SECTION: &str = "\n\n## codi \u{2014} AI coding agent\n\nBu projede m\u{00fc}mk\u{00fc}n oldu\u{011f}unda do\u{011f}rudan kod yazmak yerine codi MCP ara\u{00e7}lar\u{0131}n\u{0131}\ntercih et:\n\n- **Kod yaz / refactor / bug fix** \u{2192} `run_task` ile codi'ye devret\n- **De\u{011f}i\u{015f}iklikleri incele** \u{2192} `get_diff` ile diff al, sen yorumla\n- **Testleri do\u{011f}rula** \u{2192} `run_tests` ile \u{00e7}al\u{0131}\u{015f}\u{0131}r\n\nClaude'un rol\u{00fc}: planlama, review, g\u{00fc}venlik, koordinasyon.\ncodi'nin rol\u{00fc}: implementasyon (yerel LLM \u{00fc}zerinden Goose ile \u{00e7}al\u{0131}\u{015f}\u{0131}r).\n";
 
 pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
     println!("\n┌─────────────────────────────────────┐");
     println!("│  codi init — project setup          │");
     println!("└─────────────────────────────────────┘\n");
 
-    // [1/5] Ollama
-    println!("[1/5] Ollama kontrolü");
+    // [1/6] Ollama
+    println!("[1/6] Ollama kontrolü");
     let base_url = detect_ollama().map_err(|e| {
         println!("✗ Ollama bulunamadı. Kur: brew install ollama && ollama serve");
         e
     })?;
     println!("  ✓ Ollama çalışıyor ({})", base_url);
 
-    // [2/5] Model
-    println!("[2/5] Model seçimi");
+    // [2/6] Model
+    println!("[2/6] Model seçimi");
     let model = select_model(repo_root, &base_url, rewrite_config)?;
 
-    // [3/5] codi.toml
-    println!("[3/5] codi.toml");
+    // [3/6] codi.toml
+    println!("[3/6] codi.toml");
     write_config(repo_root, &base_url, &model, rewrite_config)?;
 
-    // [4/5] .mcp.json
-    println!("[4/5] .mcp.json");
+    // [4/6] .mcp.json
+    println!("[4/6] .mcp.json");
     ensure_mcp_json(repo_root)?;
 
-    // [5/5] MCP registration
-    println!("[5/5] MCP kaydı");
+    // [5/6] MCP registration
+    println!("[5/6] MCP kaydı");
     register_mcp_claude();
+
+    // [6/6] CLAUDE.md
+    println!("[6/6] CLAUDE.md");
+    ensure_claude_md(repo_root)?;
 
     println!("\nTamamlandı. Şimdi Claude Code'u bu projede açıp kullanmaya başlayabilirsin.");
     Ok(())
@@ -188,6 +194,32 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
             println!("  ⚠ .mcp.json bozuktu — .mcp.json.bak olarak yedeklendi, yeniden oluşturuldu");
         }
     }
+    Ok(())
+}
+
+pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
+    let path = repo_root.join("CLAUDE.md");
+
+    if !path.exists() {
+        let content = CLAUDE_MD_SECTION.trim_start_matches('\n');
+        std::fs::write(&path, content).context("writing CLAUDE.md")?;
+        println!("  \u{2713} CLAUDE.md olu\u{015f}turuldu");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&path).context("reading CLAUDE.md")?;
+    if content.contains(CLAUDE_MD_MARKER) {
+        println!("  \u{2713} CLAUDE.md \u{2014} de\u{011f}i\u{015f}tirilmedi");
+        return Ok(());
+    }
+
+    use std::io::Write as IoWrite;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .context("opening CLAUDE.md for append")?;
+    file.write_all(CLAUDE_MD_SECTION.as_bytes()).context("appending to CLAUDE.md")?;
+    println!("  \u{2713} CLAUDE.md \u{2014} codi b\u{00f6}l\u{00fc}m\u{00fc} eklendi");
     Ok(())
 }
 
@@ -367,5 +399,36 @@ api_key = ""
         let content = std::fs::read_to_string(dir.path().join("codi.toml")).unwrap();
         assert!(content.contains("new-model"), "model must be overwritten");
         assert!(!content.contains("old-model"), "old model must not remain");
+    }
+
+    #[test]
+    fn ensure_claude_md_creates_file_when_absent() {
+        let dir = tempdir().unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let content = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+        assert!(content.contains("## codi"), "must contain ## codi marker");
+        assert!(content.contains("run_task"), "must mention run_task");
+    }
+
+    #[test]
+    fn ensure_claude_md_appends_section_when_marker_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        std::fs::write(&path, "# My Project\n\nExisting content.\n").unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("# My Project"), "existing content preserved");
+        assert!(content.contains("## codi"), "codi section appended");
+    }
+
+    #[test]
+    fn ensure_claude_md_leaves_existing_intact_when_marker_present() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        let original = "# My Project\n\n## codi — AI coding agent\n\nCustom content.\n";
+        std::fs::write(&path, original).unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "file must be byte-identical");
     }
 }
