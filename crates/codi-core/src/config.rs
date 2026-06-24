@@ -21,6 +21,7 @@ pub struct Config {
     pub safety: SafetyConfig,
     /// Path to the `goose` binary. If unset, codi looks it up on `PATH`.
     pub goose_bin: Option<String>,
+    pub self_improvement: SelfImprovementConfig,
 }
 
 impl Default for Config {
@@ -32,6 +33,7 @@ impl Default for Config {
             rag: RagConfig::default(),
             safety: SafetyConfig::default(),
             goose_bin: None,
+            self_improvement: SelfImprovementConfig::default(),
         }
     }
 }
@@ -190,6 +192,35 @@ impl Default for SafetyConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SelfImprovementConfig {
+    pub enabled: bool,
+    pub auto_apply_low_risk: bool,
+    pub max_auto_per_run: usize,
+    pub max_diff_lines: usize,
+    pub branch_prefix: String,
+    pub blocklist: Vec<String>,
+}
+
+impl Default for SelfImprovementConfig {
+    fn default() -> Self {
+        SelfImprovementConfig {
+            enabled: true,
+            auto_apply_low_risk: true,
+            max_auto_per_run: 2,
+            max_diff_lines: 300,
+            branch_prefix: "improve".to_string(),
+            blocklist: vec![
+                "crates/codi-core/src/routing.rs".to_string(),
+                "crates/codi-core/src/mcp.rs".to_string(),
+                "crates/codi-core/src/engine.rs".to_string(),
+                "crates/codi-core/src/config.rs".to_string(),
+            ],
+        }
+    }
+}
+
 impl Config {
     /// Parse a config from a TOML string.
     pub fn from_toml(s: &str) -> Result<Config> {
@@ -328,5 +359,37 @@ base_url = "http://localhost:9999/v1"
     fn unknown_keys_are_rejected() {
         let err = Config::from_toml("nonsense_key = 1").unwrap_err();
         assert!(err.to_string().contains("parse"));
+    }
+
+    #[test]
+    fn self_improvement_defaults() {
+        let c = Config::default();
+        assert!(c.self_improvement.enabled);
+        assert!(c.self_improvement.auto_apply_low_risk);
+        assert_eq!(c.self_improvement.max_auto_per_run, 2);
+        assert_eq!(c.self_improvement.max_diff_lines, 300);
+        assert_eq!(c.self_improvement.branch_prefix, "improve");
+        assert_eq!(c.self_improvement.blocklist.len(), 4);
+    }
+
+    #[test]
+    fn self_improvement_toml_roundtrip() {
+        let c = Config::default();
+        let toml = c.to_toml().unwrap();
+        let back = Config::from_toml(&toml).unwrap();
+        assert_eq!(c.self_improvement, back.self_improvement);
+    }
+
+    #[test]
+    fn self_improvement_partial_override() {
+        let c = Config::from_toml(r#"
+[self_improvement]
+enabled = false
+max_auto_per_run = 5
+"#).unwrap();
+        assert!(!c.self_improvement.enabled);
+        assert_eq!(c.self_improvement.max_auto_per_run, 5);
+        // unset field inherits default
+        assert_eq!(c.self_improvement.branch_prefix, "improve");
     }
 }

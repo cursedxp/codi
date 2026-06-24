@@ -68,3 +68,22 @@ db_path = ".codi/index.sqlite"
 # Set to false for unattended / CI mode (or use `codi run -y <task>`).
 confirm_commands = true
 confirm_writes   = true
+
+# --------------------------------------------------------------------------
+# Self-Improvement
+# --------------------------------------------------------------------------
+
+[self_improvement]
+enabled             = true
+auto_apply_low_risk = true    # false → all candidates go to pending queue for review
+max_auto_per_run    = 2       # max auto-improvements triggered per codi run
+max_diff_lines      = 300     # auto-improvements producing larger diffs are rolled back
+branch_prefix       = "improve"
+
+# Files that are never auto-modified — always require Claude review/approval
+blocklist = [
+    "crates/codi-core/src/routing.rs",
+    "crates/codi-core/src/mcp.rs",
+    "crates/codi-core/src/engine.rs",
+    "crates/codi-core/src/config.rs",
+]
