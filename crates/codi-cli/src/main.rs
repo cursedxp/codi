@@ -6,7 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 use codi_core::{
     config::Config,
-    engine::{pick_provider_label, run_session, SessionMode},
+    engine::{pick_provider_label, post_run_hook, run_session, SessionMode},
     mcp,
     review::run_review,
     setup::{
@@ -202,6 +202,10 @@ fn cmd_run(cfg: &Config, repo_root: &std::path::Path, task: &str, review: bool) 
             eprintln!("review exited with code {}", result.exit_code);
             std::process::exit(result.exit_code);
         }
+    }
+    // Post-run hook: signal collection and self-improvement (non-fatal).
+    if let Err(e) = post_run_hook(cfg, repo_root, code) {
+        tracing::warn!("self-improvement hook failed: {e:#}");
     }
     Ok(())
 }

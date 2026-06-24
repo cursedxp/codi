@@ -278,3 +278,125 @@ pub fn make_review_payload(diff: &str, extra: Value) -> Value {
         "extra": extra
     })
 }
+
+/// Called after each one-shot `run_session` in `cmd_run`. Collects signals,
+/// classifies risk, auto-applies Low-risk improvements, queues High-risk ones.
+/// No-op when `cfg.self_improvement.enabled` is false.
+pub fn post_run_hook(cfg: &Config, repo_root: &Path, goose_exit_code: i32) -> Result<()> {
+    if !cfg.self_improvement.enabled {
+        return Ok(());
+    }
+
+    let changed_files = git_changed_files(repo_root);
+    let clippy_output = run_clippy_capture(repo_root);
+
+    let signals = crate::signals::collect_signals(
+        repo_root, &clippy_output, &changed_files, goose_exit_code,
+    );
+    if signals.signals.is_empty() {
+        return Ok(());
+    }
+
+    let candidates = crate::risk::classify(&signals, &cfg.self_improvement, &changed_files);
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let pending_path = repo_root.join(".codi/pending_improvements.json");
+    let mut queue = crate::pending::PendingQueue::load(&pending_path)?;
+    let executor = crate::improve::ImprovementExecutor::new(cfg, repo_root);
+    let mut auto_count = 0usize;
+
+    for candidate in candidates {
+        let is_high = candidate.risk == crate::risk::RiskLevel::High;
+        if is_high || !cfg.self_improvement.auto_apply_low_risk {
+            tracing::info!(id = %candidate.id, "queuing improvement: {}", candidate.description);
+            queue.push(candidate)?;
+        } else {
+            tracing::info!(id = %candidate.id, "attempting auto-improvement: {}", candidate.description);
+            match executor.run(&candidate, &mut auto_count)? {
+                crate::improve::Outcome::Applied { branch } => {
+                    tracing::info!("self-improvement applied on branch '{branch}'");
+                }
+                crate::improve::Outcome::Failed { reason }
+                | crate::improve::Outcome::Skipped { reason } => {
+                    tracing::warn!("self-improvement did not apply ({reason}); queuing");
+                    queue.push(candidate)?;
+                }
+            }
+        }
+    }
+
+    queue.save()
+}
+
+fn git_changed_files(repo_root: &Path) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["diff", "--name-only", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+    else {
+        return vec![];
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect()
+}
+
+fn run_clippy_capture(repo_root: &Path) -> String {
+    let Ok(out) = std::process::Command::new("cargo")
+        .args(["clippy", "--message-format=short"])
+        .current_dir(repo_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+    else {
+        return String::new();
+    };
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+    use crate::config::Config;
+    use tempfile::tempdir;
+
+    fn init_git(dir: &std::path::Path) {
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "t@t.com"],
+            vec!["config", "user.name", "T"],
+            vec!["commit", "--allow-empty", "-m", "init"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn hook_is_noop_when_self_improvement_disabled() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let mut cfg = Config::default();
+        cfg.self_improvement.enabled = false;
+        assert!(post_run_hook(&cfg, dir.path(), 0).is_ok());
+        assert!(!dir.path().join(".codi/pending_improvements.json").exists());
+    }
+
+    #[test]
+    fn hook_is_noop_when_exit_code_zero_and_no_changes() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let cfg = Config::default();
+        // No changed files, exit_code=0, no clippy warnings → no signals
+        assert!(post_run_hook(&cfg, dir.path(), 0).is_ok());
+    }
+}
