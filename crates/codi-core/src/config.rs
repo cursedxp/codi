@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Top-level codi configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub model: ModelConfig,
@@ -24,36 +24,13 @@ pub struct Config {
     pub self_improvement: SelfImprovementConfig,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            model: ModelConfig::default(),
-            routing: RoutingConfig::default(),
-            commands: Commands::default(),
-            rag: RagConfig::default(),
-            safety: SafetyConfig::default(),
-            goose_bin: None,
-            self_improvement: SelfImprovementConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
     /// The default brain: a local, OpenAI-compatible endpoint.
     pub local: LocalModel,
     /// Optional cloud model used only when routing escalates.
     pub cloud: Option<CloudModel>,
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        ModelConfig {
-            local: LocalModel::default(),
-            cloud: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

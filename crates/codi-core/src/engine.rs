@@ -243,7 +243,7 @@ pub fn run_session_mcp(
     if let Some(goose_stdout) = child.stdout.take() {
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
-            for line in BufReader::new(goose_stdout).lines().flatten() {
+            for line in BufReader::new(goose_stdout).lines().map_while(Result::ok) {
                 eprintln!("{line}");
             }
         });

@@ -325,8 +325,9 @@ fn tool_dismiss(repo_root: &Path, args: &Value) -> Result<Value> {
             .as_secs(),
     })?;
 
+    let text = serde_json::json!({"outcome": "Dismissed", "id": id}).to_string();
     Ok(serde_json::json!({
-        "content": [{ "type": "text", "text": format!("{{\"outcome\":\"Dismissed\",\"id\":\"{id}\"}}") }]
+        "content": [{ "type": "text", "text": text }]
     }))
 }
 

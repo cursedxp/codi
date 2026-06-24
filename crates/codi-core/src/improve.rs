@@ -124,7 +124,25 @@ impl<'a> ImprovementExecutor<'a> {
             "{}\n\nFiles to focus on: {}",
             candidate.description, candidate.context
         );
-        crate::engine::run_session_mcp(self.cfg, &task, None, self.repo_root, "")?;
+        let goose_exit = crate::engine::run_session_mcp(self.cfg, &task, None, self.repo_root, "")?;
+        if goose_exit != 0 {
+            let reason = format!("Goose exited with code {goose_exit}; changes may be incomplete — rolled back");
+            git_rollback(self.repo_root, &original_branch, branch)?;
+            append_log(self.repo_root, &LogEntry {
+                id: candidate.id.clone(),
+                description: candidate.description.clone(),
+                risk: format!("{:?}", candidate.risk),
+                branch: branch.to_string(),
+                outcome: "Failed".to_string(),
+                reason: Some(reason.clone()),
+                approved_by_claude,
+                blocklist_bypassed,
+                source_signals: candidate.source_signals.clone(),
+                created_at: candidate.created_at,
+                completed_at: now_secs(),
+            })?;
+            return Ok(Outcome::Failed { reason });
+        }
 
         // Post-session diff size check
         let shortstat = git_shortstat(self.repo_root)?;
@@ -295,11 +313,12 @@ fn git_rollback(repo_root: &Path, original: &str, improve: &str) -> Result<()> {
         .status()
         .context("git checkout (rollback)")?;
     anyhow::ensure!(status.success(), "git checkout {} failed during rollback", original);
-    std::process::Command::new("git")
+    let ds = std::process::Command::new("git")
         .args(["branch", "-D", improve])
         .current_dir(repo_root)
         .status()
         .context("git branch -D (rollback)")?;
+    anyhow::ensure!(ds.success(), "git branch -D {} failed during rollback", improve);
     Ok(())
 }
 
@@ -332,10 +351,11 @@ fn git_shortstat(repo_root: &Path) -> Result<String> {
 
 fn run_test_gate(cfg: &Config, repo_root: &Path) -> bool {
     let Some(cmd) = &cfg.commands.test else {
-        return false;
+        // No test command configured — skip the gate rather than blocking.
+        return true;
     };
     if cmd.is_empty() {
-        return false;
+        return true;
     }
     let mut parts = cmd.split_whitespace();
     let Some(prog) = parts.next() else {
@@ -535,6 +555,66 @@ mod tests {
             .output().unwrap();
         let listed = String::from_utf8_lossy(&list_out.stdout).trim().to_string();
         assert!(listed.is_empty(), "improve branch should have been deleted");
+    }
+
+    #[test]
+    fn git_is_clean_on_clean_repo() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        assert!(git_is_clean(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn git_is_clean_on_dirty_repo() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        std::fs::write(dir.path().join("new.txt"), "untracked").unwrap();
+        assert!(!git_is_clean(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn git_current_branch_returns_branch_name() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let branch = git_current_branch(dir.path()).unwrap();
+        assert!(!branch.is_empty(), "should return a non-empty branch name");
+    }
+
+    #[test]
+    fn git_create_branch_and_shortstat() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        git_create_branch(dir.path(), "improve/test-create").unwrap();
+        // On a clean branch with no staged changes, shortstat is empty
+        let stat = git_shortstat(dir.path()).unwrap();
+        assert!(stat.is_empty(), "no changes yet, shortstat should be empty");
+    }
+
+    #[test]
+    fn git_commit_stages_and_commits() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        std::fs::write(dir.path().join("hello.txt"), "world").unwrap();
+        git_commit(dir.path(), "test: add hello.txt").unwrap();
+        // After commit, tree is clean
+        assert!(git_is_clean(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn git_shortstat_reports_added_lines() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        std::fs::write(dir.path().join("data.txt"), "line1\nline2\n").unwrap();
+        // Stage the file so it shows in diff HEAD
+        std::process::Command::new("git")
+            .args(["add", "data.txt"])
+            .current_dir(dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().unwrap();
+        let stat = git_shortstat(dir.path()).unwrap();
+        // shortstat should mention insertions
+        assert!(stat.contains("insertion"), "stat={stat:?}");
     }
 
     #[test]

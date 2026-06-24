@@ -16,6 +16,7 @@ codi run "Add a validate_email() function with unit tests"
 - **Hybrid RAG** — BM25 full-text search (+ optional embeddings) over your repo.
 - **Routing policy** — keep tasks local, or let `hybrid` mode escalate complex ones to cloud.
 - **Self-review** — after a task, `codi review` gives a structured diff review from the model.
+- **Self-improvement** — after each `codi run`, signals (lint warnings, test failures, missing tests) are collected, risk-classified, and low-risk fixes applied automatically on isolated branches; high-risk proposals queue for Claude review.
 - **Claude Code MCP integration** — expose `run_task / get_diff / run_tests` as native tools so Claude Code can orchestrate the implement → review → fix loop automatically.
 
 ---
@@ -187,6 +188,9 @@ exclude     = ["target/**", "node_modules/**"]
 | `run_task(task)` | Implement a feature or fix using the local agent (Goose). Goose output streams to your terminal; JSON-RPC stream stays clean. |
 | `get_diff(base?)` | Return the current `git diff` for Claude Code to review inline. |
 | `run_tests()` | Run the configured test command and return output + exit code. |
+| `list_pending_improvements()` | List queued improvement proposals awaiting review. Call after `run_task` to check for auto-collected items. |
+| `approve_improvement(id)` | Apply a queued improvement: creates a branch, runs Goose, enforces test+lint gate, commits or rolls back. |
+| `dismiss_improvement(id, reason?)` | Dismiss a queued improvement without applying it. Logs the dismissal. |
 
 ### Setup (one-time)
 
@@ -233,16 +237,48 @@ codi mcp
 
 ---
 
+## Self-improvement
+
+After each `codi run`, codi automatically collects signals (lint warnings, missing test coverage, agent reliability) and classifies them into improvement proposals.
+
+- **Low-risk proposals** (no blocklist files, no keywords like `security`/`breaking`/`migration`) are applied automatically on isolated `improve/*` branches. Both `cargo test` and `cargo clippy -- -D warnings` must pass; otherwise the branch is rolled back and the proposal queued for review.
+- **High-risk proposals** (architecture changes, blocklist files, breaking changes) are queued in `.codi/pending_improvements.json` for human or Claude review.
+
+Configure in `codi.toml`:
+
+```toml
+[self_improvement]
+enabled             = true
+auto_apply_low_risk = true
+max_auto_per_run    = 2       # max branches created per run
+max_diff_lines      = 300     # rollback if Goose changes more than this
+branch_prefix       = "improve"
+blocklist = [
+    "crates/codi-core/src/routing.rs",
+    "crates/codi-core/src/mcp.rs",
+    "crates/codi-core/src/engine.rs",
+    "crates/codi-core/src/config.rs",
+]
+```
+
+Claude Code can review queued proposals via the `list_pending_improvements`, `approve_improvement`, and `dismiss_improvement` MCP tools.
+
+---
+
 ## Project structure
 
 ```
 crates/
   codi-cli/         # thin clap CLI binary (codi)
-  codi-core/        # config, routing, engine launch, self-review, MCP server
+  codi-core/        # config, routing, engine launch, self-review, MCP server,
+                    # self-improvement (signals, risk, pending queue, executor)
   codi-rag/         # standalone MCP server: BM25 index + optional embeddings
   codi-mock-server/ # OpenAI-compatible mock for offline/hermetic tests
 .mcp.json           # Claude Code MCP registration (project-scoped)
 codi.toml           # sample project config with annotations
+.codi/              # runtime state (git-ignored)
+  pending_improvements.json   # queued improvement proposals (inbox)
+  improvement_log.jsonl       # append-only history of all applied/failed/dismissed
 ```
 
 ### Architecture
@@ -255,13 +291,25 @@ codi run "task"
   ├─ codi-rag:  MCP extension → search_context (BM25 + optional embeddings)
   ├─ goose (subprocess): agent loop
   │     model ←→ read_file / write_file / edit_file / execute_command
-  └─ codi-core: git diff → review.rs (optional self-review)
+  ├─ codi-core: git diff → review.rs (optional self-review)
+  └─ codi-core: post_run_hook → signals → risk classify
+        ├─ Low risk + auto_apply_low_risk=true
+        │     git checkout -b improve/<slug>
+        │     goose (subprocess): applies fix
+        │     cargo test && cargo clippy -D warnings
+        │     ✓ pass → git commit "self-improve: ... [auto]"
+        │     ✗ fail → rollback branch, log Failed
+        └─ High risk / pre-check failed
+              → .codi/pending_improvements.json (awaits Claude review)
 
 codi mcp  [MCP server mode for Claude Code]
   │
-  ├─ run_task   → run_session_mcp (goose stdout → stderr, JSON-RPC clean)
-  ├─ get_diff   → git diff HEAD
-  └─ run_tests  → cfg.commands.test
+  ├─ run_task                    → run_session_mcp (goose stdout → stderr, JSON-RPC clean)
+  ├─ get_diff                    → git diff HEAD
+  ├─ run_tests                   → cfg.commands.test
+  ├─ list_pending_improvements   → .codi/pending_improvements.json
+  ├─ approve_improvement(id)     → branch → goose → test+lint → commit/rollback
+  └─ dismiss_improvement(id)     → remove from queue + log Dismissed
 ```
 
 ---

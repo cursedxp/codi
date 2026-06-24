@@ -193,8 +193,8 @@ pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<Pic
     println!("\n{prompt}");
     println!("{}", "─".repeat(58));
     println!(
-        "  {:<4} {:<30} {:>6}  {}",
-        "#", "Model", "Size", "Tools  ★=coding"
+        "  {:<4} {:<30} {:>6}  Tools  ★=coding",
+        "#", "Model", "Size"
     );
     println!("{}", "─".repeat(58));
     for (i, m) in models.iter().enumerate() {

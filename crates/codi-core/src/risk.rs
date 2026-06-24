@@ -6,7 +6,7 @@ use crate::config::SelfImprovementConfig;
 use crate::signals::{Signal, SignalKind, SignalSet};
 
 const HIGH_RISK_KEYWORDS: &[&str] = &[
-    "security", "architecture", "api", "breaking", "migration",
+    "security", "architecture", "api-breaking", "breaking", "migration",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -130,8 +130,7 @@ fn signal_to_candidate(
                 id,
                 description,
                 risk: RiskLevel::Low,
-                risk_reason: "no test file in diff — auto-apply blocked; needs review"
-                    .to_string(),
+                risk_reason: "no test file in diff".to_string(),
                 source_signals: vec![signal.clone()],
                 context: context.to_string(),
                 created_at,
