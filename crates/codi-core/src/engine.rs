@@ -161,6 +161,7 @@ fn build_command(
     // Goose reads provider env vars; we write them into the YAML and also
     // set them explicitly here to ensure they take effect.
     set_env_from_yaml_if_needed(&mut cmd, cfg_path);
+    cmd.env("OLLAMA_NUM_CTX", "8192");
 
     match mode {
         SessionMode::Interactive => {
@@ -237,6 +238,10 @@ pub fn run_session_mcp(
     let mut cmd = std::process::Command::new(&goose_bin);
     cmd.current_dir(repo_root);
     set_env_from_yaml_if_needed(&mut cmd, &goose_cfg_path);
+    // Ollama's default context window (2048 tokens) is too small: Goose's system
+    // prompt + tool schemas consume ~1.5k tokens, leaving almost nothing for the
+    // task. Truncated schemas cause silent tool-call failures.
+    cmd.env("OLLAMA_NUM_CTX", "8192");
     cmd.args(["run", "--text", task]);
     // CLI flags override both Goose's global config file and env vars, ensuring
     // the model selected in codi.toml is actually used.
