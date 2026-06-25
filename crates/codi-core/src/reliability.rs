@@ -167,7 +167,48 @@ pub fn classify_task(task: &str, cfg: &ReliabilityConfig, model_name: &str) -> T
 
 // ── Stubs (filled in later tasks) ────────────────────────────────────────────
 
-pub(crate) fn decompose(_task: &str) -> ExecutionPlan { unimplemented!() }
+pub(crate) fn decompose(task: &str) -> ExecutionPlan {
+    // Extract words that look like file paths (extension + no leading dot)
+    let mut seen = std::collections::HashSet::new();
+    let mentioned_files: Vec<String> = task
+        .split_whitespace()
+        .filter_map(|w| {
+            let w = w.trim_matches(|c: char| {
+                c == ',' || c == ';' || c == '\'' || c == '"' || c == ')' || c == '('
+            });
+            let has_ext = FILE_EXTENSIONS.iter().any(|ext| w.ends_with(ext));
+            if has_ext && !w.starts_with('.') && w.len() > 3 {
+                if seen.insert(w.to_string()) { Some(w.to_string()) } else { None }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let steps = if mentioned_files.is_empty() {
+        vec![TaskStep { description: task.to_string(), expected_paths: vec![] }]
+    } else {
+        let prefix = &task[..task.len().min(120)];
+        mentioned_files
+            .iter()
+            .map(|file| TaskStep {
+                description: format!("{prefix} — focus only on: {file}"),
+                expected_paths: vec![file.clone()],
+            })
+            .collect()
+    };
+
+    let reason = if mentioned_files.is_empty() {
+        "no file paths detected; running as single step".to_string()
+    } else {
+        format!(
+            "{} file path(s) detected, decomposed into {} step(s): {}",
+            mentioned_files.len(), steps.len(), mentioned_files.join(", ")
+        )
+    };
+
+    ExecutionPlan { steps, decision_reason: reason }
+}
 
 pub fn run_reliable_session(
     _cfg: &Config,
@@ -273,5 +314,41 @@ mod tests {
         let p = classify_task("add hello() to src/main.rs", &default_cfg(), "qwen2.5:7b");
         assert!(!p.decision_reason.is_empty());
         assert!(p.decision_reason.contains("threshold"));
+    }
+
+    #[test]
+    fn decompose_single_file_mention_yields_one_step() {
+        let plan = decompose("add hello() to src/main.rs");
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].expected_paths, vec!["src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn decompose_two_file_mentions_yield_two_steps() {
+        let plan = decompose("create src/foo.rs and src/bar.rs");
+        assert_eq!(plan.steps.len(), 2);
+        let paths: Vec<_> = plan.steps.iter()
+            .flat_map(|s| s.expected_paths.iter()).cloned().collect();
+        assert!(paths.contains(&"src/foo.rs".to_string()));
+        assert!(paths.contains(&"src/bar.rs".to_string()));
+    }
+
+    #[test]
+    fn decompose_no_file_mentions_yields_single_full_step() {
+        let plan = decompose("scaffold a new project with multiple directories");
+        assert_eq!(plan.steps.len(), 1);
+        assert!(plan.steps[0].expected_paths.is_empty());
+    }
+
+    #[test]
+    fn decompose_decision_reason_is_non_empty() {
+        let plan = decompose("create src/foo.rs");
+        assert!(!plan.decision_reason.is_empty());
+    }
+
+    #[test]
+    fn decompose_step_description_references_file() {
+        let plan = decompose("create src/foo.rs with hello() function");
+        assert!(plan.steps[0].description.contains("src/foo.rs"));
     }
 }
