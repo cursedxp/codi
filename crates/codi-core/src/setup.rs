@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use toml::Value;
 
 use crate::config::Config;
-use crate::ollama::{check_tool_calls_result, is_running, list_models};
+use crate::ollama::{check_tool_calls, check_tool_calls_result, is_running, list_models};
 
 /// Result of the model picker: the chosen model name.
 pub struct PickResult {
@@ -235,10 +235,36 @@ pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<Pic
                 if let Ok(n) = s.parse::<usize>() {
                     if n >= 1 && n <= models.len() {
                         let chosen = &models[n - 1];
-                        return Ok(Some(PickResult {
-                            model: chosen.name.clone(),
-                            base_url: base_url.to_string(),
-                        }));
+                        print!("  Checking tool-call support for {} ... ", chosen.name);
+                        io::stdout().flush()?;
+                        if check_tool_calls(base_url, &chosen.name) {
+                            println!("✓");
+                            return Ok(Some(PickResult {
+                                model: chosen.name.clone(),
+                                base_url: base_url.to_string(),
+                            }));
+                        } else {
+                            println!("✗  does not support function calls");
+                            println!("  codi requires tool calling to write files.");
+                            println!("  Recommended: qwen2.5:7b or llama3.1:8b");
+                            println!();
+                            print!("  Use this model anyway? [y/N]: ");
+                            io::stdout().flush()?;
+                            let mut answer = String::new();
+                            io::stdin().read_line(&mut answer)?;
+                            if answer.trim().eq_ignore_ascii_case("y") {
+                                return Ok(Some(PickResult {
+                                    model: chosen.name.clone(),
+                                    base_url: base_url.to_string(),
+                                }));
+                            }
+                            println!();
+                            for (i, m) in models.iter().enumerate() {
+                                println!("  [{:>2}] {}", i + 1, m.label());
+                            }
+                            println!();
+                        }
+                        continue;
                     }
                 }
                 println!("  → Please enter a number between 1 and {}.", models.len());
