@@ -267,6 +267,75 @@ pub(crate) fn verify_step(
     VerificationResult::Pass
 }
 
+// ── ReliabilityEvent and log helpers ─────────────────────────────────────────
+
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReliabilityEvent {
+    pub task_id: String,
+    pub task_snippet: String,
+    pub step_index: usize,
+    pub execution_mode: String,
+    pub provider: String,
+    pub attempt: u8,
+    pub exit_code: i32,
+    /// VerificationFailReason::to_log_string() or "pass"
+    pub verification: String,
+    pub outcome: String,
+    pub decision_reason: String,
+    pub timestamp: u64,
+}
+
+pub(crate) fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+pub(crate) fn generate_task_id() -> String {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    format!("{micros:016x}")
+}
+
+pub(crate) fn resolve_log_path(repo_root: &Path, log_path: &str) -> Result<PathBuf> {
+    if std::path::Path::new(log_path).is_absolute() {
+        anyhow::bail!("reliability.log_path must be a relative path, got: {log_path}");
+    }
+    if log_path.contains("..") {
+        anyhow::bail!("reliability.log_path must not contain '..', got: {log_path}");
+    }
+    Ok(repo_root.join(log_path))
+}
+
+pub(crate) fn append_reliability_log(
+    repo_root: &Path,
+    cfg: &ReliabilityConfig,
+    event: &ReliabilityEvent,
+) -> Result<()> {
+    if !cfg.log_events {
+        return Ok(());
+    }
+    let log_path = resolve_log_path(repo_root, &cfg.log_path)?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating log dir {}", parent.display()))?;
+    }
+    let line = serde_json::to_string(event).context("serializing ReliabilityEvent")? + "\n";
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("opening {}", log_path.display()))?
+        .write_all(line.as_bytes())
+        .context("writing reliability event")
+}
+
 fn git_changed_files(repo_root: &Path) -> Vec<String> {
     // Tracked modifications and deletions
     let mut files: Vec<String> = std::process::Command::new("git")
@@ -552,5 +621,120 @@ mod tests {
     fn decompose_step_description_references_file() {
         let plan = decompose("create src/foo.rs with hello() function");
         assert!(plan.steps[0].description.contains("src/foo.rs"));
+    }
+
+    // ── Task 6: ReliabilityEvent and log helpers ─────────────────────────────
+
+    #[test]
+    fn reliability_event_serializes_to_json() {
+        let event = ReliabilityEvent {
+            task_id: "abc".to_string(),
+            task_snippet: "create src/foo.rs".to_string(),
+            step_index: 0,
+            execution_mode: "single_shot".to_string(),
+            provider: "local(qwen2.5:7b)".to_string(),
+            attempt: 1,
+            exit_code: 0,
+            verification: "pass".to_string(),
+            outcome: "success".to_string(),
+            decision_reason: "signals=0 < threshold=2".to_string(),
+            timestamp: 12345,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"outcome\":\"success\""));
+        assert!(json.contains("\"task_id\":\"abc\""));
+    }
+
+    #[test]
+    fn append_log_creates_file_and_appends() {
+        let dir = tempdir().unwrap();
+        let cfg = ReliabilityConfig::default();
+        let event = ReliabilityEvent {
+            task_id: "t1".to_string(), task_snippet: "create foo.rs".to_string(),
+            step_index: 0, execution_mode: "single_shot".to_string(),
+            provider: "local(qwen2.5:7b)".to_string(), attempt: 1, exit_code: 0,
+            verification: "pass".to_string(), outcome: "success".to_string(),
+            decision_reason: "simple".to_string(), timestamp: 1,
+        };
+        append_reliability_log(dir.path(), &cfg, &event).unwrap();
+        let path = dir.path().join(".codi/reliability.jsonl");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed["outcome"], "success");
+    }
+
+    #[test]
+    fn append_log_appends_not_overwrites() {
+        let dir = tempdir().unwrap();
+        let cfg = ReliabilityConfig::default();
+        let make_event = |task_id: &str, outcome: &str| ReliabilityEvent {
+            task_id: task_id.to_string(), task_snippet: "x".to_string(),
+            step_index: 0, execution_mode: "single_shot".to_string(),
+            provider: "local".to_string(), attempt: 1, exit_code: 0,
+            verification: "pass".to_string(), outcome: outcome.to_string(),
+            decision_reason: "y".to_string(), timestamp: 1,
+        };
+        append_reliability_log(dir.path(), &cfg, &make_event("t1", "success")).unwrap();
+        append_reliability_log(dir.path(), &cfg, &make_event("t2", "fail")).unwrap();
+        let path = dir.path().join(".codi/reliability.jsonl");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "should have two lines");
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(first["task_id"], "t1");
+        assert_eq!(second["task_id"], "t2");
+    }
+
+    #[test]
+    fn append_log_noop_when_disabled() {
+        let dir = tempdir().unwrap();
+        let mut cfg = ReliabilityConfig::default();
+        cfg.log_events = false;
+        let event = ReliabilityEvent {
+            task_id: "t2".to_string(), task_snippet: "x".to_string(),
+            step_index: 0, execution_mode: "single_shot".to_string(),
+            provider: "local".to_string(), attempt: 1, exit_code: 0,
+            verification: "pass".to_string(), outcome: "success".to_string(),
+            decision_reason: "y".to_string(), timestamp: 2,
+        };
+        append_reliability_log(dir.path(), &cfg, &event).unwrap();
+        assert!(!dir.path().join(".codi/reliability.jsonl").exists());
+    }
+
+    #[test]
+    fn resolve_log_path_rejects_absolute() {
+        let dir = tempdir().unwrap();
+        let err = resolve_log_path(dir.path(), "/etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("relative"));
+    }
+
+    #[test]
+    fn resolve_log_path_rejects_traversal() {
+        let dir = tempdir().unwrap();
+        let err = resolve_log_path(dir.path(), "../outside.jsonl").unwrap_err();
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn resolve_log_path_accepts_valid_relative() {
+        let dir = tempdir().unwrap();
+        let path = resolve_log_path(dir.path(), ".codi/reliability.jsonl").unwrap();
+        assert_eq!(path, dir.path().join(".codi/reliability.jsonl"));
+    }
+
+    #[test]
+    fn current_timestamp_returns_nonzero() {
+        assert!(current_timestamp() > 0);
+    }
+
+    #[test]
+    fn generate_task_id_is_nonempty() {
+        let id = generate_task_id();
+        assert!(!id.is_empty());
+        // Two IDs generated quickly may differ or be the same depending on timing,
+        // but each must be a valid non-empty string
+        assert!(id.len() >= 8);
     }
 }
