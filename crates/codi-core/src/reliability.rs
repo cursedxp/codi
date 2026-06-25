@@ -1,7 +1,8 @@
 //! Reliability layer: task classification, decomposition, verification,
 //! retry and escalation for small local model execution.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -269,8 +270,6 @@ pub(crate) fn verify_step(
 
 // ── ReliabilityEvent and log helpers ─────────────────────────────────────────
 
-use std::path::PathBuf;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReliabilityEvent {
     pub task_id: String,
@@ -326,7 +325,6 @@ pub(crate) fn append_reliability_log(
             .with_context(|| format!("creating log dir {}", parent.display()))?;
     }
     let line = serde_json::to_string(event).context("serializing ReliabilityEvent")? + "\n";
-    use std::io::Write;
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
