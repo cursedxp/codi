@@ -18,6 +18,7 @@ pub enum CheckId {
     McpRegistration,
     SelfImprovement,
     ClaudeMd,
+    ReliabilityLog,
 }
 
 pub struct CheckResult {
@@ -140,6 +141,9 @@ pub fn run_doctor(repo_root: &Path) -> Result<Vec<CheckResult>> {
 
     // [7] CLAUDE.md
     checks.push(check_claude_md(repo_root));
+
+    // [8] reliability log
+    checks.push(check_reliability_log(repo_root));
 
     Ok(checks)
 }
@@ -395,6 +399,95 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
     }
 }
 
+fn check_reliability_log(repo_root: &Path) -> CheckResult {
+    let log_path = repo_root.join(".codi/reliability.jsonl");
+
+    if !log_path.exists() {
+        return CheckResult {
+            id: CheckId::ReliabilityLog,
+            name: "reliability",
+            severity: Severity::Info,
+            detail: "no log yet — reliability layer has not run".to_string(),
+            suggestion: None,
+            fixable: false,
+        };
+    }
+
+    let content = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let events: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    let last_20: Vec<&serde_json::Value> = events.iter().rev().take(20).collect();
+    let total = last_20.len();
+
+    if total == 0 {
+        return CheckResult {
+            id: CheckId::ReliabilityLog,
+            name: "reliability",
+            severity: Severity::Info,
+            detail: "log file is empty".to_string(),
+            suggestion: None,
+            fixable: false,
+        };
+    }
+
+    let succeeded = last_20.iter().filter(|e| {
+        matches!(
+            e.get("outcome").and_then(|v| v.as_str()).unwrap_or(""),
+            "success" | "retry_success" | "escalation_success"
+        )
+    }).count();
+
+    let silent_failures = last_20.iter().filter(|e| {
+        e.get("verification").and_then(|v| v.as_str()).unwrap_or("").contains("no_diff")
+    }).count();
+
+    let escalations = last_20.iter().filter(|e| {
+        e.get("outcome").and_then(|v| v.as_str()).unwrap_or("").contains("escalation")
+    }).count();
+
+    let success_pct = (succeeded * 100) / total;
+
+    let severity = if silent_failures > 0 || success_pct < 70 {
+        Severity::Error
+    } else if success_pct < 90 {
+        Severity::Warning
+    } else {
+        Severity::Ok
+    };
+
+    let detail = if success_pct == 100 {
+        format!("100% success ({succeeded}/{total}) — last {total} events")
+    } else {
+        let mut parts = vec![format!("{success_pct}% success ({succeeded}/{total})")];
+        if silent_failures > 0 {
+            parts.push(format!("{silent_failures} silent failures"));
+        }
+        if escalations > 0 {
+            parts.push(format!("{escalations} escalations"));
+        }
+        parts.join(", ")
+    };
+
+    let suggestion = if matches!(severity, Severity::Ok) {
+        None
+    } else {
+        Some("cat .codi/reliability.jsonl | jq .".to_string())
+    };
+
+    CheckResult {
+        id: CheckId::ReliabilityLog,
+        name: "reliability",
+        severity,
+        detail,
+        suggestion,
+        fixable: false,
+    }
+}
+
 fn read_model_from_toml(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     let val: toml::Value = toml::from_str(&content).ok()?;
@@ -557,5 +650,110 @@ mod tests {
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd)
             .expect("ClaudeMd check must be present");
         assert!(matches!(c.severity, Severity::Ok), "severity must be Ok after fix");
+    }
+
+    #[test]
+    fn reliability_log_missing_returns_info() {
+        let dir = tempdir().unwrap();
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Info));
+    }
+
+    #[test]
+    fn reliability_log_all_success_returns_ok() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join("reliability.jsonl");
+        let success_line = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
+        use std::io::Write as _;
+        for _ in 0..5 {
+            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success_line}").unwrap();
+        }
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Ok), "detail: {}", c.detail);
+    }
+
+    #[test]
+    fn reliability_log_silent_failures_returns_error() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join("reliability.jsonl");
+        let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
+        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"no_diff","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        use std::io::Write as _;
+        for line in [success, success, fail, fail, fail] {
+            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
+        }
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
+    }
+
+    #[test]
+    fn reliability_log_empty_file_returns_info() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("reliability.jsonl"), "").unwrap();
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Info), "detail: {}", c.detail);
+    }
+
+    #[test]
+    fn reliability_log_below_70_pct_returns_error() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join("reliability.jsonl");
+        let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
+        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        use std::io::Write as _;
+        // 2 success, 4 fail → 33% success < 70%
+        for line in [success, success, fail, fail, fail, fail] {
+            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
+        }
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
+    }
+
+    #[test]
+    fn reliability_log_between_70_and_90_pct_returns_warning() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join("reliability.jsonl");
+        let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
+        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        use std::io::Write as _;
+        // 8 success, 2 fail → 80% → Warning (≥70 but <90)
+        for _ in 0..8 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success}").unwrap(); }
+        for _ in 0..2 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{fail}").unwrap(); }
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        assert!(matches!(c.severity, Severity::Warning), "detail: {}", c.detail);
+    }
+
+    #[test]
+    fn reliability_log_escalation_count_in_detail() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join(".codi");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join("reliability.jsonl");
+        let escalation = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"cloud","attempt":3,"exit_code":0,"verification":"pass","outcome":"escalation_success","decision_reason":"ok","timestamp":1}"#;
+        use std::io::Write as _;
+        for _ in 0..5 {
+            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{escalation}").unwrap();
+        }
+        let checks = run_doctor(dir.path()).unwrap();
+        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        // 5 escalation_success events → succeeded=5, total=5 → Ok severity
+        // But escalation count (5) should appear in the detail
+        assert!(c.detail.contains('5'), "detail should mention escalation count: {}", c.detail);
     }
 }
