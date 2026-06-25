@@ -104,7 +104,9 @@ pub fn is_running(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// List all models installed in Ollama, sorted by size descending.
+/// List all models installed in Ollama. Runs function-calling inference checks
+/// in parallel so the total wait is roughly one model's check time, not N×.
+/// Returns only models confirmed to return proper tool_calls API responses.
 pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
     let url = format!("{}/api/tags", ollama_root(base_url));
 
@@ -113,15 +115,30 @@ pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
         .json()
         .context("parsing Ollama model list")?;
 
-    let mut models: Vec<OllamaModel> = resp
-        .models
+    let base_url = base_url.to_string();
+    let raw: Vec<TagModel> = resp.models;
+
+    // Run tool-call checks in parallel — one thread per model.
+    let handles: Vec<_> = raw
         .into_iter()
-        .map(|m| OllamaModel {
-            known_coding: is_known_coding(&m.name),
-            name: m.name,
-            size_gb: m.size as f64 / 1e9,
-            tool_calls: None,
+        .map(|m| {
+            let bu = base_url.clone();
+            std::thread::spawn(move || {
+                let supports = check_tool_calls(&bu, &m.name);
+                OllamaModel {
+                    known_coding: is_known_coding(&m.name),
+                    name: m.name,
+                    size_gb: m.size as f64 / 1e9,
+                    tool_calls: Some(supports),
+                }
+            })
         })
+        .collect();
+
+    let mut models: Vec<OllamaModel> = handles
+        .into_iter()
+        .filter_map(|h| h.join().ok())
+        .filter(|m| m.tool_calls == Some(true))
         .collect();
 
     // Sort: known coding models first, then by size descending.
@@ -175,7 +192,7 @@ fn check_tool_calls_inner(base_url: &str, model: &str) -> anyhow::Result<bool> {
     });
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
     let resp = client

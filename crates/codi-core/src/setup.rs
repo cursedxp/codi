@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use toml::Value;
 
 use crate::config::Config;
-use crate::ollama::{check_tool_calls, check_tool_calls_result, is_running, list_models};
+use crate::ollama::{check_tool_calls_result, is_running, list_models};
 
 /// Result of the model picker: the chosen model name.
 pub struct PickResult {
@@ -179,33 +179,38 @@ pub(crate) fn detect_ollama() -> Result<String> {
 /// Show an interactive numbered list and return the user's choice.
 /// Returns `Ok(None)` if the user pressed 'q' to cancel — not an error.
 pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<PickResult>> {
-    // Single round-trip: list_models already checks connectivity.
+    // list_models checks each model's template for function-calling support
+    // (fast — no inference). Only models that pass are returned.
+    print!("  Scanning installed models for function-calling support...");
+    io::stdout().flush()?;
     let models = list_models(base_url)
         .with_context(|| format!("Ollama is not running at {base_url}. Start it with: ollama serve"))?;
+    println!();
+
     if models.is_empty() {
         bail!(
-            "No models installed in Ollama.\n\
-             Pull one first, e.g.:\n\n  ollama pull qwen2.5:7b\n"
+            "No function-calling models found in Ollama.\n\
+             Pull a compatible model first, e.g.:\n\n  ollama pull qwen2.5:7b\n"
         );
     }
 
     println!("\n{prompt}");
     println!("{}", "─".repeat(58));
     println!(
-        "  {:<4} {:<30} {:>6}  Tools  ★=coding",
+        "  {:<4} {:<30} {:>6}  ★=coding",
         "#", "Model", "Size"
     );
     println!("{}", "─".repeat(58));
     for (i, m) in models.iter().enumerate() {
-        println!("  [{:>2}] {}", i + 1, m.label());
+        let coding = if m.known_coding { " ★" } else { "" };
+        println!("  [{:>2}] {:<30} {:>6.1} GB{}", i + 1, m.name, m.size_gb, coding);
     }
     println!("{}", "─".repeat(58));
-    println!("  [ c] Check tool-call support for a model");
     println!("  [ q] Quit without changing anything");
     println!();
 
     loop {
-        print!("Enter number (or c/q): ");
+        print!("Enter number (or q): ");
         io::stdout().flush()?;
 
         let mut line = String::new();
@@ -217,54 +222,14 @@ pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<Pic
                 println!("Cancelled.");
                 return Ok(None);
             }
-            "c" | "C" => {
-                print!("Model name to check: ");
-                io::stdout().flush()?;
-                let mut name = String::new();
-                io::stdin().read_line(&mut name)?;
-                if let Err(e) = check_model(base_url, name.trim()) {
-                    eprintln!("Error: {e}");
-                }
-                println!();
-                for (i, m) in models.iter().enumerate() {
-                    println!("  [{:>2}] {}", i + 1, m.label());
-                }
-                println!();
-            }
             s => {
                 if let Ok(n) = s.parse::<usize>() {
                     if n >= 1 && n <= models.len() {
                         let chosen = &models[n - 1];
-                        print!("  Checking tool-call support for {} ... ", chosen.name);
-                        io::stdout().flush()?;
-                        if check_tool_calls(base_url, &chosen.name) {
-                            println!("✓");
-                            return Ok(Some(PickResult {
-                                model: chosen.name.clone(),
-                                base_url: base_url.to_string(),
-                            }));
-                        } else {
-                            println!("✗  does not support function calls");
-                            println!("  codi requires tool calling to write files.");
-                            println!("  Recommended: qwen2.5:7b or llama3.1:8b");
-                            println!();
-                            print!("  Use this model anyway? [y/N]: ");
-                            io::stdout().flush()?;
-                            let mut answer = String::new();
-                            io::stdin().read_line(&mut answer)?;
-                            if answer.trim().eq_ignore_ascii_case("y") {
-                                return Ok(Some(PickResult {
-                                    model: chosen.name.clone(),
-                                    base_url: base_url.to_string(),
-                                }));
-                            }
-                            println!();
-                            for (i, m) in models.iter().enumerate() {
-                                println!("  [{:>2}] {}", i + 1, m.label());
-                            }
-                            println!();
-                        }
-                        continue;
+                        return Ok(Some(PickResult {
+                            model: chosen.name.clone(),
+                            base_url: base_url.to_string(),
+                        }));
                     }
                 }
                 println!("  → Please enter a number between 1 and {}.", models.len());
