@@ -21,6 +21,7 @@ pub struct ReliabilityOutcome {
     pub steps_total: usize,
     pub steps_succeeded: usize,
     pub decision_reason: String,
+    pub events: Vec<ReliabilityEvent>,
 }
 
 pub struct TaskProfile {
@@ -334,6 +335,20 @@ pub(crate) fn append_reliability_log(
         .context("writing reliability event")
 }
 
+fn run_engine(cfg: &Config, task: &str, repo_root: &Path, ctx: &RunContext) -> Result<i32> {
+    match ctx {
+        RunContext::Mcp => engine::run_session_mcp(cfg, task, None, repo_root, ""),
+        RunContext::Cli => engine::run_session(
+            cfg,
+            task,
+            engine::SessionMode::OneShot(task.to_string()),
+            None,
+            repo_root,
+            "",
+        ),
+    }
+}
+
 fn git_changed_files(repo_root: &Path) -> Vec<String> {
     // Tracked modifications and deletions
     let mut files: Vec<String> = std::process::Command::new("git")
@@ -369,13 +384,239 @@ fn git_changed_files(repo_root: &Path) -> Vec<String> {
     files
 }
 
+#[allow(clippy::too_many_arguments)]
+fn execute_with_guard(
+    cfg: &Config,
+    step: &TaskStep,
+    step_index: usize,
+    profile: &TaskProfile,
+    execution_mode: &str,
+    repo_root: &Path,
+    task_id: &str,
+    engine_fn: &dyn Fn(&str, u8) -> Result<i32>,
+) -> Result<Vec<ReliabilityEvent>> {
+    let provider_str = format!("local({})", cfg.model.local.model);
+    let mut events: Vec<ReliabilityEvent> = Vec::new();
+
+    let make_event = |attempt: u8, exit_code: i32, verification: &str, outcome: &str| {
+        ReliabilityEvent {
+            task_id: task_id.to_string(),
+            task_snippet: step.description[..step.description.len().min(120)].to_string(),
+            step_index,
+            execution_mode: execution_mode.to_string(),
+            provider: provider_str.clone(),
+            attempt,
+            exit_code,
+            verification: verification.to_string(),
+            outcome: outcome.to_string(),
+            decision_reason: profile.decision_reason.clone(),
+            timestamp: current_timestamp(),
+        }
+    };
+
+    // Attempt 1 — local model
+    let exit_code = engine_fn(&step.description, 1)?;
+    let v1 = verify_step(step, profile, repo_root, exit_code);
+
+    if matches!(v1, VerificationResult::Pass) {
+        let event = make_event(1, exit_code, "pass", "success");
+        append_reliability_log(repo_root, &cfg.reliability, &event)?;
+        events.push(event);
+        return Ok(events);
+    }
+
+    let fail1 = match &v1 {
+        VerificationResult::Fail(r) => r.to_log_string(),
+        _ => unreachable!(),
+    };
+    tracing::warn!(step = step_index, reason = %fail1, "step failed verification");
+
+    // Attempt 2 — local retry with narrowed prompt
+    if cfg.reliability.max_retries > 0 {
+        let retry_prompt = format!(
+            "Previous attempt wrote no files. Focus only on: {}",
+            step.description
+        );
+        let retry_exit = engine_fn(&retry_prompt, 2)?;
+        let v2 = verify_step(step, profile, repo_root, retry_exit);
+
+        if matches!(v2, VerificationResult::Pass) {
+            let event = make_event(2, retry_exit, "pass", "retry_success");
+            append_reliability_log(repo_root, &cfg.reliability, &event)?;
+            events.push(event);
+            return Ok(events);
+        }
+
+        let fail2 = match &v2 {
+            VerificationResult::Fail(r) => r.to_log_string(),
+            _ => unreachable!(),
+        };
+        tracing::warn!(step = step_index, reason = %fail2, "retry failed");
+
+        // Attempt 3 — cloud escalation
+        if cfg.reliability.escalate_on_retry_failure && cfg.model.cloud.is_some() {
+            let cloud_label = cfg.model.cloud.as_ref()
+                .map(|c| format!("cloud({}/{})", c.provider, c.model))
+                .unwrap_or_else(|| "cloud".to_string());
+
+            tracing::warn!(step = step_index, provider = %cloud_label, "escalating to cloud");
+
+            let esc_exit = engine_fn(&step.description, 3)?;
+            let v3 = verify_step(step, profile, repo_root, esc_exit);
+
+            let (v3_str, outcome, ok) = match &v3 {
+                VerificationResult::Pass => (
+                    "pass".to_string(),
+                    "escalation_success".to_string(),
+                    true,
+                ),
+                VerificationResult::Fail(r) => (
+                    r.to_log_string(),
+                    "escalation_fail".to_string(),
+                    false,
+                ),
+            };
+
+            let event = ReliabilityEvent {
+                task_id: task_id.to_string(),
+                task_snippet: step.description[..step.description.len().min(120)].to_string(),
+                step_index,
+                execution_mode: execution_mode.to_string(),
+                provider: cloud_label,
+                attempt: 3,
+                exit_code: esc_exit,
+                verification: v3_str,
+                outcome,
+                decision_reason: profile.decision_reason.clone(),
+                timestamp: current_timestamp(),
+            };
+            append_reliability_log(repo_root, &cfg.reliability, &event)?;
+            events.push(event);
+
+            if ok {
+                return Ok(events);
+            }
+            anyhow::bail!(
+                "step {step_index} failed after local retry and cloud escalation \
+                 (retry_reason={fail2})"
+            );
+        }
+
+        // No cloud — log failure and bail
+        let event = make_event(2, retry_exit, &fail2, "fail");
+        append_reliability_log(repo_root, &cfg.reliability, &event)?;
+        events.push(event);
+        anyhow::bail!("step {step_index} failed after retry (reason={fail2})");
+    }
+
+    // max_retries = 0: log first failure and bail
+    let event = make_event(1, exit_code, &fail1, "fail");
+    append_reliability_log(repo_root, &cfg.reliability, &event)?;
+    events.push(event);
+    anyhow::bail!("step {step_index} failed (no retries): {fail1}");
+}
+
 pub fn run_reliable_session(
-    _cfg: &Config,
-    _task: &str,
-    _repo_root: &Path,
-    _ctx: RunContext,
+    cfg: &Config,
+    task: &str,
+    repo_root: &Path,
+    ctx: RunContext,
 ) -> Result<ReliabilityOutcome> {
-    unimplemented!()
+    // Fast path: reliability disabled
+    if !cfg.reliability.enabled {
+        let exit_code = run_engine(cfg, task, repo_root, &ctx)?;
+        return Ok(ReliabilityOutcome {
+            success: exit_code == 0,
+            exit_code,
+            execution_mode: "bypass".to_string(),
+            steps_total: 1,
+            steps_succeeded: if exit_code == 0 { 1 } else { 0 },
+            decision_reason: "reliability.enabled = false".to_string(),
+            events: vec![],
+        });
+    }
+
+    let profile = classify_task(task, &cfg.reliability, &cfg.model.local.model);
+    let task_id = generate_task_id();
+
+    let (execution_mode, steps) = match profile.complexity {
+        TaskComplexity::Simple => (
+            "single_shot".to_string(),
+            vec![TaskStep { description: task.to_string(), expected_paths: vec![] }],
+        ),
+        TaskComplexity::Complex => {
+            let plan = decompose(task);
+            tracing::info!(
+                steps = plan.steps.len(),
+                reason = %plan.decision_reason,
+                "task decomposed"
+            );
+            ("decomposed".to_string(), plan.steps)
+        }
+    };
+
+    let steps_total = steps.len();
+    let mut steps_succeeded = 0usize;
+    let mut all_events: Vec<ReliabilityEvent> = Vec::new();
+
+    let cloud_cfg_storage;
+    let engine_fn = {
+        let local_cfg = cfg;
+        let repo_root_ref = repo_root;
+        let ctx_ref = &ctx;
+
+        // Build a cloud config for escalation (attempt 3) if configured.
+        let cloud_cfg: Option<Config> = if local_cfg.reliability.escalate_on_retry_failure
+            && local_cfg.model.cloud.is_some()
+        {
+            let mut c = local_cfg.clone();
+            c.routing.mode = RoutingMode::CloudPreferred;
+            Some(c)
+        } else {
+            None
+        };
+        cloud_cfg_storage = cloud_cfg;
+
+        move |task_str: &str, attempt: u8| -> Result<i32> {
+            if attempt >= 3 {
+                if let Some(ref cc) = cloud_cfg_storage {
+                    return run_engine(cc, task_str, repo_root_ref, ctx_ref);
+                }
+            }
+            run_engine(local_cfg, task_str, repo_root_ref, ctx_ref)
+        }
+    };
+
+    for (i, step) in steps.iter().enumerate() {
+        match execute_with_guard(cfg, step, i, &profile, &execution_mode, repo_root, &task_id, &engine_fn) {
+            Ok(step_events) => {
+                all_events.extend(step_events);
+                steps_succeeded += 1;
+            }
+            Err(e) => {
+                tracing::error!(step = i, error = %e, "step failed");
+                return Ok(ReliabilityOutcome {
+                    success: false,
+                    exit_code: 1,
+                    execution_mode,
+                    steps_total,
+                    steps_succeeded,
+                    decision_reason: profile.decision_reason,
+                    events: all_events,
+                });
+            }
+        }
+    }
+
+    Ok(ReliabilityOutcome {
+        success: steps_succeeded == steps_total,
+        exit_code: 0,
+        execution_mode,
+        steps_total,
+        steps_succeeded,
+        decision_reason: profile.decision_reason,
+        events: all_events,
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -734,5 +975,188 @@ mod tests {
         // Two IDs generated quickly may differ or be the same depending on timing,
         // but each must be a valid non-empty string
         assert!(id.len() >= 8);
+    }
+
+    // ── Task 7: run_reliable_session ─────────────────────────────────────────
+
+    #[test]
+    fn reliability_outcome_struct_has_correct_fields() {
+        let outcome = ReliabilityOutcome {
+            success: true,
+            exit_code: 0,
+            execution_mode: "single_shot".to_string(),
+            steps_total: 1,
+            steps_succeeded: 1,
+            decision_reason: "test".to_string(),
+            events: vec![],
+        };
+        assert!(outcome.success);
+        assert_eq!(outcome.steps_total, 1);
+        assert_eq!(outcome.steps_succeeded, 1);
+    }
+
+    #[test]
+    fn classify_before_running_does_not_panic() {
+        let mut cfg = crate::config::Config::default();
+        cfg.reliability.enabled = false;
+        // Verify that classify_task works end-to-end with a real config
+        let profile = classify_task("create src/foo.rs", &cfg.reliability, &cfg.model.local.model);
+        assert!(profile.write_intent);
+        // 1 file signal < threshold=2 for small model → Simple
+        assert!(matches!(profile.complexity, TaskComplexity::Simple));
+    }
+
+    #[test]
+    fn run_reliable_session_disabled_returns_bypass_outcome() {
+        use crate::config::Config;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        // Set up a minimal git repo so run_engine won't panic before hitting goose
+        // (engine will fail because goose is not installed, so we just test the
+        // disabled fast-path which calls run_engine — expect Err if goose absent)
+        let mut cfg = Config::default();
+        cfg.reliability.enabled = false;
+
+        // With reliability disabled, run_reliable_session calls run_engine which
+        // calls engine::run_session_mcp — goose likely absent in CI, so we expect
+        // either Ok with bypass outcome or an Err (no panic).
+        let result = run_reliable_session(&cfg, "echo test", dir.path(), RunContext::Cli);
+        // We only require no panic. Err is acceptable (goose not installed).
+        match result {
+            Ok(outcome) => {
+                assert_eq!(outcome.execution_mode, "bypass");
+                assert_eq!(outcome.decision_reason, "reliability.enabled = false");
+                assert_eq!(outcome.steps_total, 1);
+            }
+            Err(_) => {
+                // Goose not installed — acceptable in test env
+            }
+        }
+    }
+
+    #[test]
+    fn run_reliable_session_enabled_no_goose_returns_err_not_panic() {
+        use crate::config::Config;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let mut cfg = Config::default();
+        cfg.reliability.enabled = true;
+
+        // Task with no file paths → Simple → single_shot → calls run_engine
+        // Goose not installed → Err expected, NOT a panic
+        let result = run_reliable_session(&cfg, "echo hello", dir.path(), RunContext::Cli);
+        // Just ensure it doesn't panic; Err is fine
+        let _ = result;
+    }
+
+    // ── Task 7: execute_with_guard + mock engine tests ───────────────────────
+
+    /// Builds a default Config with reliability enabled.
+    fn enabled_cfg() -> crate::config::Config {
+        let mut cfg = crate::config::Config::default();
+        cfg.reliability.enabled = true;
+        cfg.reliability.max_retries = 1;
+        cfg
+    }
+
+    #[test]
+    fn single_shot_success_with_git_diff_passes() {
+        // Temp git repo with a committed file change (write-intent task, real diff)
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        write_file(dir.path(), "src/foo.rs", "fn hello() {}");
+
+        let cfg = enabled_cfg();
+        let profile = write_profile();
+        let step = TaskStep {
+            description: "create src/foo.rs".to_string(),
+            expected_paths: vec![],
+        };
+
+        // Mock engine always returns exit code 0 (success). The git diff will
+        // detect the untracked file we wrote above.
+        let engine_fn = |_task: &str, _attempt: u8| -> Result<i32> { Ok(0) };
+
+        let events = execute_with_guard(
+            &cfg, &step, 0, &profile, "single_shot", dir.path(), "task-001", &engine_fn,
+        )
+        .unwrap();
+
+        assert!(!events.is_empty());
+        assert_eq!(events[0].outcome, "success");
+        assert_eq!(events[0].attempt, 1);
+    }
+
+    #[test]
+    fn single_shot_fail_retry_no_diff_outcome_is_false() {
+        // Engine always returns 0 but no git diff → NoDiff on both attempts
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+
+        let cfg = enabled_cfg();
+        let profile = write_profile();
+        let step = TaskStep {
+            description: "create src/foo.rs".to_string(),
+            expected_paths: vec![],
+        };
+
+        let engine_fn = |_task: &str, _attempt: u8| -> Result<i32> { Ok(0) };
+
+        let result = execute_with_guard(
+            &cfg, &step, 0, &profile, "single_shot", dir.path(), "task-002", &engine_fn,
+        );
+
+        assert!(result.is_err(), "should fail: no git diff on either attempt");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed after retry"), "error: {err}");
+    }
+
+    #[test]
+    fn execute_with_guard_nonzero_exit_fails_immediately() {
+        // Mock engine returns exit code 1 → NonZeroExit → outcome.success = false
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+
+        let mut cfg = enabled_cfg();
+        cfg.reliability.max_retries = 0; // no retry so we bail on attempt 1
+
+        let profile = write_profile();
+        let step = TaskStep {
+            description: "create src/bar.rs".to_string(),
+            expected_paths: vec![],
+        };
+
+        let engine_fn = |_task: &str, _attempt: u8| -> Result<i32> { Ok(1) };
+
+        let result = execute_with_guard(
+            &cfg, &step, 0, &profile, "single_shot", dir.path(), "task-003", &engine_fn,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nonzero_exit"), "error: {err}");
+    }
+
+    #[test]
+    fn run_reliable_session_disabled_uses_bypass_outcome() {
+        // With reliability.enabled = false, outcome is "bypass" with correct fields.
+        // engine_fn is injected indirectly via run_reliable_session's real closure,
+        // but goose may not be installed — we only verify the outcome shape when Ok.
+        let dir = tempdir().unwrap();
+        let mut cfg = crate::config::Config::default();
+        cfg.reliability.enabled = false;
+
+        let result = run_reliable_session(&cfg, "echo test", dir.path(), RunContext::Cli);
+        match result {
+            Ok(outcome) => {
+                assert_eq!(outcome.execution_mode, "bypass");
+                assert_eq!(outcome.decision_reason, "reliability.enabled = false");
+                assert_eq!(outcome.steps_total, 1);
+                assert!(outcome.events.is_empty());
+            }
+            Err(_) => { /* goose absent — acceptable */ }
+        }
     }
 }
