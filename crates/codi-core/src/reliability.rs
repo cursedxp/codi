@@ -27,6 +27,7 @@ pub struct TaskProfile {
     pub write_intent: bool,
     pub complexity: TaskComplexity,
     pub decision_reason: String,
+    pub verify_artifacts: bool,
 }
 
 pub enum TaskComplexity { Simple, Complex }
@@ -188,7 +189,7 @@ pub fn classify_task(task: &str, cfg: &ReliabilityConfig, model_name: &str) -> T
         )
     };
 
-    TaskProfile { write_intent, complexity, decision_reason }
+    TaskProfile { write_intent, complexity, decision_reason, verify_artifacts: cfg.verify_artifacts }
 }
 
 // ── Stubs (filled in later tasks) ────────────────────────────────────────────
@@ -245,7 +246,7 @@ pub(crate) fn verify_step(
     if exit_code != 0 {
         return VerificationResult::Fail(VerificationFailReason::NonZeroExit(exit_code));
     }
-    if !profile.write_intent {
+    if !profile.write_intent || !profile.verify_artifacts {
         return VerificationResult::Pass;
     }
 
@@ -459,25 +460,41 @@ fn execute_with_guard(
         return (true, events);
     }
 
-    let fail1 = match &v1 {
-        VerificationResult::Fail(r) => r.to_log_string(),
+    // Log initial failure
+    let fail_reason = match &v1 {
+        VerificationResult::Fail(r) => r.clone(),
         _ => unreachable!(),
     };
-    tracing::warn!(step = step_index, reason = %fail1, "step failed verification");
+    tracing::warn!(step = step_index, reason = %fail_reason.to_log_string(), "step failed verification");
 
-    // Attempt 2 — local retry with narrowed prompt
-    if max_retries >= 1 {
-        let retry_prompt = format!(
-            "Previous attempt wrote no files. Focus only on: {}",
-            step.description
-        );
+    // Local retry loop: attempts 2..=(1 + max_retries)
+    let mut last_fail_reason = fail_reason;
+    let mut last_exit_code = exit_code;
+
+    for retry_num in 1..=(max_retries as u32) {
+        let attempt_num = (1 + retry_num) as u8;
+        let retry_prompt = match &last_fail_reason {
+            VerificationFailReason::NoDiff => format!(
+                "Previous attempt wrote no files. Focus only on: {}",
+                step.description
+            ),
+            VerificationFailReason::MissingPaths(_) => format!(
+                "Previous attempt did not create all expected files. Focus only on: {}",
+                step.description
+            ),
+            VerificationFailReason::NonZeroExit(code) => format!(
+                "Previous attempt failed with exit code {code}. Try again: {}",
+                step.description
+            ),
+        };
+
         let retry_exit = match run_engine(cfg, &retry_prompt, repo_root, ctx) {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(step = step_index, error = %e, "engine error on attempt 2");
+                tracing::error!(step = step_index, attempt = attempt_num, error = %e, "engine error on retry");
                 let event = build_event(
                     task_id, task_snippet, step_index, execution_mode_str,
-                    &local_provider, 2, -1,
+                    &local_provider, attempt_num, -1,
                     &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
                     "fail", &profile.decision_reason,
                 );
@@ -486,79 +503,78 @@ fn execute_with_guard(
                 return (false, events);
             }
         };
-        let v2 = verify_step(step, profile, repo_root, retry_exit);
+        let v_retry = verify_step(step, profile, repo_root, retry_exit);
 
-        if matches!(v2, VerificationResult::Pass) {
+        if matches!(v_retry, VerificationResult::Pass) {
             let event = build_event(
                 task_id, task_snippet, step_index, execution_mode_str,
-                &local_provider, 2, retry_exit, &v2, "retry_success", &profile.decision_reason,
+                &local_provider, attempt_num, retry_exit, &v_retry, "retry_success",
+                &profile.decision_reason,
             );
             let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
             events.push(event);
             return (true, events);
         }
 
-        let fail2 = match &v2 {
-            VerificationResult::Fail(r) => r.to_log_string(),
+        last_exit_code = retry_exit;
+        last_fail_reason = match v_retry {
+            VerificationResult::Fail(r) => r,
             _ => unreachable!(),
         };
-        tracing::warn!(step = step_index, reason = %fail2, "retry failed");
+        tracing::warn!(
+            step = step_index, attempt = attempt_num,
+            reason = %last_fail_reason.to_log_string(), "retry failed"
+        );
+    }
 
-        // Attempt 3 — cloud escalation
-        if cfg.reliability.escalate_on_retry_failure && cfg.model.cloud.is_some() {
-            let cloud_label = cfg.model.cloud.as_ref()
-                .map(|c| format!("cloud({}/{})", c.provider, c.model))
-                .unwrap_or_else(|| "cloud".to_string());
+    // All local retries exhausted — try cloud escalation if configured
+    let escalation_attempt = (2u32 + max_retries as u32) as u8;
+    if cfg.reliability.escalate_on_retry_failure && cfg.model.cloud.is_some() {
+        let cloud_label = cfg.model.cloud.as_ref()
+            .map(|c| format!("cloud({}/{})", c.provider, c.model))
+            .unwrap_or_else(|| "cloud".to_string());
 
-            tracing::warn!(step = step_index, provider = %cloud_label, "escalating to cloud");
+        tracing::warn!(step = step_index, provider = %cloud_label, "escalating to cloud");
 
-            let mut cloud_cfg = cfg.clone();
-            cloud_cfg.routing.mode = RoutingMode::CloudPreferred;
+        let mut cloud_cfg = cfg.clone();
+        cloud_cfg.routing.mode = RoutingMode::CloudPreferred;
 
-            let esc_exit = match run_engine(&cloud_cfg, &step.description, repo_root, ctx) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!(step = step_index, error = %e, "engine error on attempt 3 (cloud)");
-                    let event = build_event(
-                        task_id, task_snippet, step_index, execution_mode_str,
-                        &cloud_label, 3, -1,
-                        &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
-                        "escalation_fail", &profile.decision_reason,
-                    );
-                    let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
-                    events.push(event);
-                    return (false, events);
-                }
-            };
-            let v3 = verify_step(step, profile, repo_root, esc_exit);
+        let esc_exit = match run_engine(&cloud_cfg, &step.description, repo_root, ctx) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(step = step_index, error = %e, "engine error on cloud escalation");
+                let event = build_event(
+                    task_id, task_snippet, step_index, execution_mode_str,
+                    &cloud_label, escalation_attempt, -1,
+                    &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
+                    "escalation_fail", &profile.decision_reason,
+                );
+                let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
+                events.push(event);
+                return (false, events);
+            }
+        };
+        let v_esc = verify_step(step, profile, repo_root, esc_exit);
 
-            let (outcome, ok) = match &v3 {
-                VerificationResult::Pass => ("escalation_success", true),
-                VerificationResult::Fail(_) => ("escalation_fail", false),
-            };
-            let event = build_event(
-                task_id, task_snippet, step_index, execution_mode_str,
-                &cloud_label, 3, esc_exit, &v3, outcome, &profile.decision_reason,
-            );
-            let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
-            events.push(event);
-            return (ok, events);
-        }
-
-        // No cloud — log retry failure
+        let (outcome, ok) = match &v_esc {
+            VerificationResult::Pass => ("escalation_success", true),
+            VerificationResult::Fail(_) => ("escalation_fail", false),
+        };
         let event = build_event(
             task_id, task_snippet, step_index, execution_mode_str,
-            &local_provider, 2, retry_exit, &v2, "fail", &profile.decision_reason,
+            &cloud_label, escalation_attempt, esc_exit, &v_esc, outcome, &profile.decision_reason,
         );
         let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
         events.push(event);
-        return (false, events);
+        return (ok, events);
     }
 
-    // max_retries = 0: log first failure
+    // No cloud — log final local failure
+    let final_v = VerificationResult::Fail(last_fail_reason);
     let event = build_event(
         task_id, task_snippet, step_index, execution_mode_str,
-        &local_provider, 1, exit_code, &v1, "fail", &profile.decision_reason,
+        &local_provider, escalation_attempt.saturating_sub(1), last_exit_code,
+        &final_v, "fail", &profile.decision_reason,
     );
     let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
     events.push(event);
@@ -675,11 +691,11 @@ mod tests {
 
     fn write_profile() -> TaskProfile {
         TaskProfile { write_intent: true, complexity: TaskComplexity::Simple,
-            decision_reason: "test".to_string() }
+            decision_reason: "test".to_string(), verify_artifacts: true }
     }
     fn read_profile() -> TaskProfile {
         TaskProfile { write_intent: false, complexity: TaskComplexity::Simple,
-            decision_reason: "test".to_string() }
+            decision_reason: "test".to_string(), verify_artifacts: true }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::path::Path;
 use anyhow::Result;
+use crate::config::Config;
 use crate::ollama;
 
 pub enum Severity {
@@ -30,7 +31,7 @@ pub struct CheckResult {
     pub fixable: bool,
 }
 
-pub fn run_doctor(repo_root: &Path) -> Result<Vec<CheckResult>> {
+pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
     let mut checks = Vec::new();
 
     // [1] codi.toml
@@ -143,13 +144,13 @@ pub fn run_doctor(repo_root: &Path) -> Result<Vec<CheckResult>> {
     checks.push(check_claude_md(repo_root));
 
     // [8] reliability log
-    checks.push(check_reliability_log(repo_root));
+    checks.push(check_reliability_log(repo_root, cfg));
 
     Ok(checks)
 }
 
-pub fn run_doctor_fix(repo_root: &Path) -> Result<Vec<CheckResult>> {
-    let mut checks = run_doctor(repo_root)?;
+pub fn run_doctor_fix(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
+    let mut checks = run_doctor(repo_root, cfg)?;
 
     for check in &mut checks {
         if !matches!(check.severity, Severity::Error) || !check.fixable {
@@ -399,8 +400,20 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
     }
 }
 
-fn check_reliability_log(repo_root: &Path) -> CheckResult {
-    let log_path = repo_root.join(".codi/reliability.jsonl");
+fn check_reliability_log(repo_root: &Path, cfg: &Config) -> CheckResult {
+    let log_path = match crate::reliability::resolve_log_path(repo_root, &cfg.reliability.log_path) {
+        Ok(p) => p,
+        Err(_) => {
+            return CheckResult {
+                id: CheckId::ReliabilityLog,
+                name: "reliability",
+                severity: Severity::Info,
+                detail: "invalid log_path config".to_string(),
+                suggestion: None,
+                fixable: false,
+            };
+        }
+    };
 
     if !log_path.exists() {
         return CheckResult {
@@ -501,7 +514,10 @@ fn read_model_from_toml(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use tempfile::tempdir;
+
+    fn default_cfg() -> Config { Config::default() }
 
     fn init_toml(dir: &std::path::Path, model: &str) {
         let content = format!(
@@ -513,7 +529,7 @@ mod tests {
     #[test]
     fn check_toml_missing_returns_error() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let toml_check = checks.iter().find(|c| c.name == "codi.toml").unwrap();
         assert!(matches!(toml_check.severity, Severity::Error));
         assert_eq!(toml_check.id, CheckId::CodiToml);
@@ -523,7 +539,7 @@ mod tests {
     fn check_toml_present_returns_ok() {
         let dir = tempdir().unwrap();
         init_toml(dir.path(), "qwen2.5:7b");
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let toml_check = checks.iter().find(|c| c.name == "codi.toml").unwrap();
         assert!(matches!(toml_check.severity, Severity::Ok));
     }
@@ -531,7 +547,7 @@ mod tests {
     #[test]
     fn check_mcp_json_missing_returns_error() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let mcp_check = checks.iter().find(|c| c.id == CheckId::McpJson).unwrap();
         assert!(matches!(mcp_check.severity, Severity::Error));
         assert!(mcp_check.fixable);
@@ -544,7 +560,7 @@ mod tests {
             dir.path().join(".mcp.json"),
             r#"{"mcpServers":{"codi":{"command":"codi","args":["mcp"]}}}"#,
         ).unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let mcp_check = checks.iter().find(|c| c.id == CheckId::McpJson).unwrap();
         assert!(matches!(mcp_check.severity, Severity::Ok));
     }
@@ -553,7 +569,7 @@ mod tests {
     fn check_mcp_json_corrupt_returns_error() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join(".mcp.json"), "not json {{{").unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let mcp_check = checks.iter().find(|c| c.id == CheckId::McpJson).unwrap();
         assert!(matches!(mcp_check.severity, Severity::Error));
     }
@@ -597,7 +613,7 @@ mod tests {
     #[test]
     fn doctor_fix_creates_mcp_json_and_marks_ok() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor_fix(dir.path()).unwrap();
+        let checks = run_doctor_fix(dir.path(), &default_cfg()).unwrap();
         assert!(dir.path().join(".mcp.json").exists(), "file must be created");
         let mcp = checks.iter().find(|c| c.id == CheckId::McpJson)
             .expect("McpJson check must be present");
@@ -608,7 +624,7 @@ mod tests {
     fn self_improvement_absent_is_warning_not_error() {
         let dir = tempdir().unwrap();
         init_toml(dir.path(), "qwen2.5:7b");
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let si_check = checks.iter().find(|c| c.id == CheckId::SelfImprovement)
             .expect("self_improvement check must be present when codi.toml has no [self_improvement] section");
         assert!(matches!(si_check.severity, Severity::Warning));
@@ -617,7 +633,7 @@ mod tests {
     #[test]
     fn check_claude_md_missing_returns_error() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
         assert!(matches!(c.severity, Severity::Error));
         assert!(c.fixable);
@@ -627,7 +643,7 @@ mod tests {
     fn check_claude_md_without_codi_section_returns_error() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("CLAUDE.md"), "# My Project\n").unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
         assert!(matches!(c.severity, Severity::Error));
         assert!(c.fixable);
@@ -637,7 +653,7 @@ mod tests {
     fn check_claude_md_with_codi_section_returns_ok() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("CLAUDE.md"), "# Project\n\n## codi\n\nContent.\n").unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
         assert!(matches!(c.severity, Severity::Ok));
     }
@@ -645,7 +661,7 @@ mod tests {
     #[test]
     fn doctor_fix_creates_claude_md_and_marks_ok() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor_fix(dir.path()).unwrap();
+        let checks = run_doctor_fix(dir.path(), &default_cfg()).unwrap();
         assert!(dir.path().join("CLAUDE.md").exists(), "CLAUDE.md must be created");
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd)
             .expect("ClaudeMd check must be present");
@@ -655,7 +671,7 @@ mod tests {
     #[test]
     fn reliability_log_missing_returns_info() {
         let dir = tempdir().unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Info));
     }
@@ -671,7 +687,7 @@ mod tests {
         for _ in 0..5 {
             writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success_line}").unwrap();
         }
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Ok), "detail: {}", c.detail);
     }
@@ -688,7 +704,7 @@ mod tests {
         for line in [success, success, fail, fail, fail] {
             writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
         }
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
     }
@@ -699,7 +715,7 @@ mod tests {
         let log_dir = dir.path().join(".codi");
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("reliability.jsonl"), "").unwrap();
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Info), "detail: {}", c.detail);
     }
@@ -717,7 +733,7 @@ mod tests {
         for line in [success, success, fail, fail, fail, fail] {
             writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
         }
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
     }
@@ -734,7 +750,7 @@ mod tests {
         // 8 success, 2 fail → 80% → Warning (≥70 but <90)
         for _ in 0..8 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success}").unwrap(); }
         for _ in 0..2 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{fail}").unwrap(); }
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         assert!(matches!(c.severity, Severity::Warning), "detail: {}", c.detail);
     }
@@ -750,7 +766,7 @@ mod tests {
         for _ in 0..5 {
             writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{escalation}").unwrap();
         }
-        let checks = run_doctor(dir.path()).unwrap();
+        let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
         // 5 escalation_success events → succeeded=5, total=5 → Ok severity
         // But escalation count (5) should appear in the detail

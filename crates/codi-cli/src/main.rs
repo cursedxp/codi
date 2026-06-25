@@ -156,7 +156,7 @@ fn main() -> Result<()> {
             mcp::serve(&cfg, &repo_root)?;
         }
         Some(Cmd::Doctor { fix }) => {
-            cmd_doctor(&repo_root, fix)?;
+            cmd_doctor(&cfg, &repo_root, fix)?;
         }
         Some(Cmd::Init { rewrite_config }) => {
             run_init(&repo_root, rewrite_config)?;
@@ -274,11 +274,11 @@ fn cmd_model(
     Ok(())
 }
 
-fn cmd_doctor(repo_root: &std::path::Path, fix: bool) -> Result<()> {
+fn cmd_doctor(cfg: &Config, repo_root: &std::path::Path, fix: bool) -> Result<()> {
     let checks = if fix {
-        run_doctor_fix(repo_root)?
+        run_doctor_fix(repo_root, cfg)?
     } else {
-        run_doctor(repo_root)?
+        run_doctor(repo_root, cfg)?
     };
     let has_errors = print_doctor_report(&checks);
     if has_errors {
