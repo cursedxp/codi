@@ -16,6 +16,7 @@ pub mod ollama;
 pub mod pending;
 pub mod review;
 pub mod risk;
+pub mod reliability;
 pub mod routing;
 pub mod setup;
 pub mod signals;
