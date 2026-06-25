@@ -22,6 +22,7 @@ pub struct Config {
     /// Path to the `goose` binary. If unset, codi looks it up on `PATH`.
     pub goose_bin: Option<String>,
     pub self_improvement: SelfImprovementConfig,
+    pub reliability: ReliabilityConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -198,6 +199,37 @@ impl Default for SelfImprovementConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReliabilityConfig {
+    pub enabled: bool,
+    /// If Some, overrides the tier-derived threshold.
+    pub decompose_threshold: Option<u32>,
+    /// "small" | "medium" | "large" | "" (auto-detect from model name).
+    pub model_tier: String,
+    pub verify_artifacts: bool,
+    pub max_retries: u8,
+    pub escalate_on_retry_failure: bool,
+    pub log_events: bool,
+    /// Relative path from repo root. Must not contain '..' or be absolute.
+    pub log_path: String,
+}
+
+impl Default for ReliabilityConfig {
+    fn default() -> Self {
+        ReliabilityConfig {
+            enabled: true,
+            decompose_threshold: None,
+            model_tier: String::new(),
+            verify_artifacts: true,
+            max_retries: 1,
+            escalate_on_retry_failure: true,
+            log_events: true,
+            log_path: ".codi/reliability.jsonl".to_string(),
+        }
+    }
+}
+
 impl Config {
     /// Parse a config from a TOML string.
     pub fn from_toml(s: &str) -> Result<Config> {
@@ -368,5 +400,41 @@ max_auto_per_run = 5
         assert_eq!(c.self_improvement.max_auto_per_run, 5);
         // unset field inherits default
         assert_eq!(c.self_improvement.branch_prefix, "improve");
+    }
+
+    #[test]
+    fn reliability_defaults() {
+        let c = Config::default();
+        assert!(c.reliability.enabled);
+        assert!(c.reliability.verify_artifacts);
+        assert_eq!(c.reliability.max_retries, 1);
+        assert!(c.reliability.escalate_on_retry_failure);
+        assert!(c.reliability.log_events);
+        assert_eq!(c.reliability.log_path, ".codi/reliability.jsonl");
+        assert!(c.reliability.decompose_threshold.is_none());
+        assert!(c.reliability.model_tier.is_empty());
+    }
+
+    #[test]
+    fn reliability_toml_roundtrip() {
+        let c = Config::default();
+        let toml = c.to_toml().unwrap();
+        let back = Config::from_toml(&toml).unwrap();
+        assert_eq!(c.reliability, back.reliability);
+    }
+
+    #[test]
+    fn reliability_partial_override() {
+        let c = Config::from_toml(r#"
+[reliability]
+enabled = false
+max_retries = 0
+model_tier = "small"
+"#).unwrap();
+        assert!(!c.reliability.enabled);
+        assert_eq!(c.reliability.max_retries, 0);
+        assert_eq!(c.reliability.model_tier, "small");
+        assert!(c.reliability.verify_artifacts); // inherits default
+        assert_eq!(c.reliability.log_path, ".codi/reliability.jsonl");
     }
 }
