@@ -143,6 +143,8 @@ Model tier'a göre eşik değişir. Model tier tespiti: model adı substring'i i
 | medium | `14b`, `13b`, `32b` içeren isimler | 4 |
 | large | diğerleri ve cloud modeller | 8 |
 
+**Öncelik sırası:** `config.reliability.model_tier` > model adı substring analizi. `config.reliability.decompose_threshold` açıkça belirtilmişse tier bazlı varsayılanı ezer. İkisi de belirtilmişse `decompose_threshold` explicit değeri her zaman kazanır.
+
 **Decomposition tetikleyici sinyaller** (eşiğe sayılan):
 - Görevde dosya yolu geçmesi (`.rs`, `.ts`, `.py`, vb. uzantılar)
 - "birden fazla klasör", "repository kur", "scaffold", "birkaç dosya" kalıpları
