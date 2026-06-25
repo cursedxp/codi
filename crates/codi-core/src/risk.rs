@@ -151,6 +151,12 @@ fn signal_to_candidate(
             })
         }
 
+        // VerificationFail: not yet turned into improvement candidate
+        SignalKind::VerificationFail { .. } => None,
+
+        // EscalationTriggered: not yet turned into improvement candidate
+        SignalKind::EscalationTriggered { .. } => None,
+
         // AgentReliability handled separately
         SignalKind::AgentReliability { .. } => None,
     }

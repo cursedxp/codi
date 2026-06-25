@@ -14,6 +14,15 @@ pub enum SignalKind {
     TodoFixme { text: String, file: String, context_radius: usize },
     /// Separate from code-quality signals — tracks agent execution health.
     AgentReliability { exit_code: i32, tool_failures: Vec<String> },
+    VerificationFail {
+        task_snippet: String,
+        missing_paths: Vec<String>,
+        reason: String,
+    },
+    EscalationTriggered {
+        reason: String,
+        escalation_provider: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,5 +181,34 @@ mod tests {
     #[test]
     fn parse_diff_line_count_empty() {
         assert_eq!(parse_diff_line_count(""), 0);
+    }
+
+    #[test]
+    fn verification_fail_signal_is_constructible() {
+        let s = SignalSet {
+            signals: vec![Signal {
+                kind: SignalKind::VerificationFail {
+                    task_snippet: "create src/foo.rs".to_string(),
+                    missing_paths: vec!["src/foo.rs".to_string()],
+                    reason: "missing_paths".to_string(),
+                },
+                severity: 1,
+            }],
+        };
+        assert!(matches!(&s.signals[0].kind, SignalKind::VerificationFail { .. }));
+    }
+
+    #[test]
+    fn escalation_triggered_signal_is_constructible() {
+        let s = SignalSet {
+            signals: vec![Signal {
+                kind: SignalKind::EscalationTriggered {
+                    reason: "retry failed".to_string(),
+                    escalation_provider: "cloud(claude-sonnet-4-6)".to_string(),
+                },
+                severity: 1,
+            }],
+        };
+        assert!(matches!(&s.signals[0].kind, SignalKind::EscalationTriggered { .. }));
     }
 }
