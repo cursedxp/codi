@@ -7,9 +7,10 @@ use tracing_subscriber::EnvFilter;
 use codi_core::{
     config::Config,
     doctor::{print_doctor_report, run_doctor, run_doctor_fix},
-    engine::{pick_provider_label, post_run_hook, run_session, SessionMode},
+    engine::{pick_provider_label, post_run_hook},
     init::run_init,
     mcp,
+    reliability::{run_reliable_session, RunContext},
     review::run_review,
     setup::{check_model, is_first_launch, list_available_models, set_model},
 };
@@ -188,10 +189,9 @@ fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
             continue;
         }
         let _ = rl.add_history_entry(task);
-        let code =
-            run_session(cfg, task, SessionMode::OneShot(task.to_string()), None, repo_root, "")?;
-        if code != 0 {
-            eprintln!("goose exited with code {code}");
+        let outcome = run_reliable_session(cfg, task, repo_root, RunContext::Cli)?;
+        if !outcome.success {
+            eprintln!("task failed ({})", outcome.decision_reason);
         }
     }
     Ok(())
@@ -199,17 +199,16 @@ fn run_interactive(cfg: &Config, repo_root: &std::path::Path) -> Result<()> {
 
 fn cmd_run(cfg: &Config, repo_root: &std::path::Path, task: &str, review: bool) -> Result<()> {
     println!("Provider: {}", pick_provider_label(cfg, task));
-    let code = run_session(
-        cfg,
-        task,
-        SessionMode::OneShot(task.to_string()),
-        None,
-        repo_root,
-        "",
-    )?;
-    if code != 0 {
-        eprintln!("goose exited with code {code}");
+    let outcome = run_reliable_session(cfg, task, repo_root, RunContext::Cli)?;
+    if !outcome.success {
+        eprintln!(
+            "task failed (exit={}, mode={}, steps={}/{}, reason={})",
+            outcome.exit_code, outcome.execution_mode,
+            outcome.steps_succeeded, outcome.steps_total,
+            outcome.decision_reason,
+        );
     }
+    let code = outcome.exit_code;
     if review {
         println!("\n--- Self-review ---");
         let result = run_review(cfg, repo_root, false)?;

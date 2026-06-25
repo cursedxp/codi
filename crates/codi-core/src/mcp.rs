@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::engine::run_session_mcp;
+use crate::reliability::{run_reliable_session, RunContext};
 
 /// Start the MCP stdio server. Blocks until stdin is closed.
 pub fn serve(cfg: &Config, repo_root: &Path) -> Result<()> {
@@ -165,16 +165,23 @@ fn dispatch(cfg: &Config, repo_root: &Path, method: &str, params: &Value) -> Res
 fn tool_run_task(cfg: &Config, repo_root: &Path, args: &Value) -> Result<Value> {
     let task = args["task"].as_str().context("missing 'task' argument")?;
 
-    let exit_code = run_session_mcp(cfg, task, None, repo_root, "")?;
+    let outcome = run_reliable_session(cfg, task, repo_root, RunContext::Mcp)?;
 
-    let message = if exit_code == 0 {
-        "Task complete. Call get_diff to review the changes.".to_string()
+    let message = if outcome.success {
+        format!(
+            "Task complete ({} step(s), mode={}). Call get_diff to review the changes.",
+            outcome.steps_total, outcome.execution_mode
+        )
     } else {
-        format!("Agent exited with code {exit_code}. Check terminal output for details.")
+        format!(
+            "Task failed ({}/{} steps, mode={}, reason={}). Check terminal output for details.",
+            outcome.steps_succeeded, outcome.steps_total,
+            outcome.execution_mode, outcome.decision_reason
+        )
     };
 
     Ok(serde_json::json!({
-        "content": [{ "type": "text", "text": format!("{message}\nexit_code: {exit_code}") }]
+        "content": [{ "type": "text", "text": format!("{message}\nexit_code: {}", outcome.exit_code) }]
     }))
 }
 
@@ -406,5 +413,18 @@ mod mcp_improve_tests {
         assert!(names.contains(&"list_pending_improvements"));
         assert!(names.contains(&"approve_improvement"));
         assert!(names.contains(&"dismiss_improvement"));
+    }
+
+    #[test]
+    fn tools_list_includes_run_task() {
+        let dir = tempdir().unwrap();
+        let cfg = Config::default();
+        let result = dispatch(&cfg, dir.path(), "tools/list", &serde_json::Value::Null).unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(
+            names.contains(&"run_task"),
+            "run_task must appear in tools/list after wiring run_reliable_session"
+        );
     }
 }
