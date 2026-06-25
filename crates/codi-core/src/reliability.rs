@@ -42,6 +42,31 @@ pub struct TaskStep {
     pub expected_paths: Vec<String>,
 }
 
+// ── Verification types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum VerificationResult {
+    Pass,
+    Fail(VerificationFailReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum VerificationFailReason {
+    NoDiff,
+    MissingPaths(Vec<String>),
+    NonZeroExit(i32),
+}
+
+impl VerificationFailReason {
+    pub fn to_log_string(&self) -> String {
+        match self {
+            Self::NoDiff => "no_diff".to_string(),
+            Self::MissingPaths(paths) => format!("missing_paths:{}", paths.join(",")),
+            Self::NonZeroExit(code) => format!("nonzero_exit:{code}"),
+        }
+    }
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const WRITE_KEYWORDS: &[&str] = &[
@@ -210,6 +235,73 @@ pub(crate) fn decompose(task: &str) -> ExecutionPlan {
     ExecutionPlan { steps, decision_reason: reason }
 }
 
+pub(crate) fn verify_step(
+    step: &TaskStep,
+    profile: &TaskProfile,
+    repo_root: &Path,
+    exit_code: i32,
+) -> VerificationResult {
+    if exit_code != 0 {
+        return VerificationResult::Fail(VerificationFailReason::NonZeroExit(exit_code));
+    }
+    if !profile.write_intent {
+        return VerificationResult::Pass;
+    }
+
+    let changed = git_changed_files(repo_root);
+
+    if changed.is_empty() {
+        return VerificationResult::Fail(VerificationFailReason::NoDiff);
+    }
+
+    if !step.expected_paths.is_empty() {
+        let missing: Vec<String> = step.expected_paths.iter()
+            .filter(|exp| !changed.iter().any(|f| f.ends_with(exp.as_str())))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return VerificationResult::Fail(VerificationFailReason::MissingPaths(missing));
+        }
+    }
+
+    VerificationResult::Pass
+}
+
+fn git_changed_files(repo_root: &Path) -> Vec<String> {
+    // Tracked modifications and deletions
+    let mut files: Vec<String> = std::process::Command::new("git")
+        .args(["diff", "HEAD", "--name-only"])
+        .current_dir(repo_root)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Untracked new files (git diff HEAD won't show them).
+    // --untracked-files=all expands directories so we get individual file paths.
+    let untracked: Vec<String> = std::process::Command::new("git")
+        .args(["status", "--short", "--untracked-files=all"])
+        .current_dir(repo_root)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| {
+                    if l.starts_with("??") { Some(l[3..].trim().to_string()) } else { None }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    files.extend(untracked);
+    files
+}
+
 pub fn run_reliable_session(
     _cfg: &Config,
     _task: &str,
@@ -225,6 +317,116 @@ pub fn run_reliable_session(
 mod tests {
     use super::*;
     use crate::config::ReliabilityConfig;
+    use tempfile::tempdir;
+
+    fn init_git(dir: &std::path::Path) {
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "t@t.com"],
+            vec!["config", "user.name", "T"],
+            vec!["commit", "--allow-empty", "-m", "init"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().unwrap();
+        }
+    }
+
+    fn write_file(dir: &std::path::Path, path: &str, content: &str) {
+        let full = dir.join(path);
+        if let Some(p) = full.parent() { std::fs::create_dir_all(p).unwrap(); }
+        std::fs::write(full, content).unwrap();
+    }
+
+    fn write_profile() -> TaskProfile {
+        TaskProfile { write_intent: true, complexity: TaskComplexity::Simple,
+            decision_reason: "test".to_string() }
+    }
+    fn read_profile() -> TaskProfile {
+        TaskProfile { write_intent: false, complexity: TaskComplexity::Simple,
+            decision_reason: "test".to_string() }
+    }
+
+    #[test]
+    fn verify_nonzero_exit_always_fails() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let step = TaskStep { description: "x".to_string(), expected_paths: vec![] };
+        assert!(matches!(
+            verify_step(&step, &write_profile(), dir.path(), 1),
+            VerificationResult::Fail(VerificationFailReason::NonZeroExit(1))
+        ));
+    }
+
+    #[test]
+    fn verify_read_intent_empty_diff_passes() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let step = TaskStep { description: "review code".to_string(), expected_paths: vec![] };
+        assert!(matches!(verify_step(&step, &read_profile(), dir.path(), 0), VerificationResult::Pass));
+    }
+
+    #[test]
+    fn verify_write_intent_empty_diff_fails() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        let step = TaskStep { description: "create foo.rs".to_string(), expected_paths: vec![] };
+        assert!(matches!(
+            verify_step(&step, &write_profile(), dir.path(), 0),
+            VerificationResult::Fail(VerificationFailReason::NoDiff)
+        ));
+    }
+
+    #[test]
+    fn verify_write_intent_with_changed_file_passes() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        write_file(dir.path(), "src/foo.rs", "fn hello() {}");
+        let step = TaskStep { description: "create src/foo.rs".to_string(), expected_paths: vec![] };
+        assert!(matches!(verify_step(&step, &write_profile(), dir.path(), 0), VerificationResult::Pass));
+    }
+
+    #[test]
+    fn verify_expected_path_present_passes() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        write_file(dir.path(), "src/foo.rs", "fn hello() {}");
+        let step = TaskStep {
+            description: "create src/foo.rs".to_string(),
+            expected_paths: vec!["src/foo.rs".to_string()],
+        };
+        assert!(matches!(verify_step(&step, &write_profile(), dir.path(), 0), VerificationResult::Pass));
+    }
+
+    #[test]
+    fn verify_expected_path_missing_fails() {
+        let dir = tempdir().unwrap();
+        init_git(dir.path());
+        write_file(dir.path(), "src/other.rs", "fn other() {}");
+        let step = TaskStep {
+            description: "create src/foo.rs".to_string(),
+            expected_paths: vec!["src/foo.rs".to_string()],
+        };
+        let result = verify_step(&step, &write_profile(), dir.path(), 0);
+        assert!(matches!(
+            result,
+            VerificationResult::Fail(VerificationFailReason::MissingPaths(ref p))
+            if p.contains(&"src/foo.rs".to_string())
+        ));
+    }
+
+    #[test]
+    fn verification_fail_reason_log_strings() {
+        assert_eq!(VerificationFailReason::NoDiff.to_log_string(), "no_diff");
+        assert_eq!(
+            VerificationFailReason::MissingPaths(vec!["src/foo.rs".to_string()]).to_log_string(),
+            "missing_paths:src/foo.rs"
+        );
+        assert_eq!(VerificationFailReason::NonZeroExit(2).to_log_string(), "nonzero_exit:2");
+    }
 
     fn default_cfg() -> ReliabilityConfig { ReliabilityConfig::default() }
 
