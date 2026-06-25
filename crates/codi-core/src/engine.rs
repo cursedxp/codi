@@ -182,6 +182,20 @@ fn build_command(
     cmd
 }
 
+/// Append `--provider <p> --model <m>` so CLI flags override both the global
+/// Goose config file (~/.config/goose/config.yaml) and env vars.
+/// Local models always use the openai-compatible endpoint via OPENAI_BASE_URL.
+fn append_provider_flags(cmd: &mut std::process::Command, provider: &Provider) {
+    match provider {
+        Provider::Local(m) => {
+            cmd.args(["--provider", "openai", "--model", &m.model]);
+        }
+        Provider::Cloud(m) => {
+            cmd.args(["--provider", &m.provider, "--model", &m.model]);
+        }
+    }
+}
+
 /// Goose primarily reads provider settings from environment variables.
 /// Parse our generated YAML's simple `KEY: value` lines and set them.
 fn set_env_from_yaml_if_needed(cmd: &mut std::process::Command, yaml_path: &Path) {
@@ -224,6 +238,9 @@ pub fn run_session_mcp(
     cmd.current_dir(repo_root);
     set_env_from_yaml_if_needed(&mut cmd, &goose_cfg_path);
     cmd.args(["run", "--text", task]);
+    // CLI flags override both Goose's global config file and env vars, ensuring
+    // the model selected in codi.toml is actually used.
+    append_provider_flags(&mut cmd, &provider);
     cmd.arg("--system").arg(crate::standards::CODING_STANDARDS);
     // Pipe goose stdout → a thread that echoes it to our stderr.
     // This keeps the MCP JSON-RPC stream on stdout clean.

@@ -69,6 +69,9 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
     let mut fresh = crate::config::Config::default();
     fresh.model.local.base_url = base_url.to_string();
     fresh.model.local.model = model.to_string();
+    // MCP runs non-interactively (stdin=null); confirmation prompts would block forever.
+    fresh.safety.confirm_writes = false;
+    fresh.safety.confirm_commands = false;
 
     if rewrite_config || !toml_path.exists() {
         let content = fresh.to_toml().context("serializing config")?;
