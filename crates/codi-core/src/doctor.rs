@@ -433,7 +433,14 @@ fn check_reliability_log(repo_root: &Path, cfg: &Config) -> CheckResult {
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
 
-    let last_20: Vec<&serde_json::Value> = events.iter().rev().take(20).collect();
+    // "retrying" events are intermediate attempts, not terminal outcomes —
+    // counting them would drag the success rate for tasks that recovered.
+    let last_20: Vec<&serde_json::Value> = events
+        .iter()
+        .rev()
+        .filter(|e| e.get("outcome").and_then(|v| v.as_str()) != Some("retrying"))
+        .take(20)
+        .collect();
     let total = last_20.len();
 
     if total == 0 {
