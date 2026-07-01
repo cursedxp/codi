@@ -88,6 +88,7 @@ const READ_KEYWORDS: &[&str] = &[
 const FILE_EXTENSIONS: &[&str] = &[
     ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".rb",
     ".c", ".h", ".cpp", ".hpp", ".md", ".toml", ".yaml", ".yml", ".json",
+    ".html", ".htm", ".css", ".scss", ".svg", ".sql", ".sh",
 ];
 
 const DECOMPOSE_PATTERNS: &[&str] = &[
@@ -170,6 +171,15 @@ pub(crate) fn snippet(s: &str, max: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+/// Expected artifacts for a single-shot step. Only trust the extraction when
+/// the task names exactly ONE file — with several mentions we can't tell
+/// targets from references (e.g. "create index.html" citing app.js in a
+/// script tag), and a referenced file would false-fail as missing_paths.
+fn single_shot_expected_paths(task: &str) -> Vec<String> {
+    let mentions = extract_file_mentions(task);
+    if mentions.len() == 1 { mentions } else { Vec::new() }
 }
 
 fn count_complexity_signals(task: &str) -> u32 {
@@ -783,11 +793,9 @@ pub fn run_reliable_session(
     let (execution_mode, steps) = match profile.complexity {
         TaskComplexity::Simple => (
             "single_shot".to_string(),
-            // Extract targets here too: without them, verification degrades to
-            // "any file anywhere changed", which passes on any write at all.
             vec![TaskStep {
                 description: task.to_string(),
-                expected_paths: extract_file_mentions(task),
+                expected_paths: single_shot_expected_paths(task),
             }],
         ),
         TaskComplexity::Complex => {
@@ -1256,6 +1264,21 @@ mod tests {
     fn extract_file_mentions_dedups_and_orders() {
         let files = extract_file_mentions("create data.js and app.js then edit data.js");
         assert_eq!(files, vec!["data.js".to_string(), "app.js".to_string()]);
+    }
+
+    // Regression: "create index.html with <script src=app.js>" treated app.js
+    // as an expected artifact and false-failed with missing_paths — a
+    // referenced file is not a write target.
+    #[test]
+    fn single_shot_expected_paths_only_when_unambiguous() {
+        assert_eq!(
+            single_shot_expected_paths("Create a new file data.js with fake records"),
+            vec!["data.js".to_string()]
+        );
+        assert!(single_shot_expected_paths(
+            "Create index.html linking styles.css and app.js via script tag"
+        ).is_empty());
+        assert!(single_shot_expected_paths("scaffold the project").is_empty());
     }
 
     // snippet() must never panic on a multibyte boundary (Turkish task text).
