@@ -104,9 +104,33 @@ pub fn is_running(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// List all models installed in Ollama. Runs function-calling inference checks
-/// in parallel so the total wait is roughly one model's check time, not N×.
-/// Returns only models confirmed to return proper tool_calls API responses.
+/// Tool support read from `/api/show` capabilities — instant metadata, no
+/// model load. Returns None when this Ollama version doesn't report
+/// capabilities (pre-0.6), so the caller can fall back to an inference probe.
+fn capabilities_tool_support(base_url: &str, model: &str) -> Option<bool> {
+    let url = format!("{}/api/show", ollama_root(base_url));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({"model": model}))
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().ok()?;
+    let caps = json.get("capabilities")?.as_array()?;
+    Some(caps.iter().any(|c| c.as_str() == Some("tools")))
+}
+
+/// List all models installed in Ollama, keeping only those with tool-call
+/// support. Support is read from `/api/show` capabilities (instant); only when
+/// that's unavailable does it fall back to a live inference probe. The probe
+/// loads the model into memory — probing N models in parallel used to thrash
+/// Ollama into 15s timeouts and report ZERO tool-capable models.
 pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
     let url = format!("{}/api/tags", ollama_root(base_url));
 
@@ -124,7 +148,8 @@ pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
         .map(|m| {
             let bu = base_url.clone();
             std::thread::spawn(move || {
-                let supports = check_tool_calls(&bu, &m.name);
+                let supports = capabilities_tool_support(&bu, &m.name)
+                    .unwrap_or_else(|| check_tool_calls(&bu, &m.name));
                 OllamaModel {
                     known_coding: is_known_coding(&m.name),
                     name: m.name,
