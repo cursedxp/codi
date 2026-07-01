@@ -5,8 +5,41 @@ use crate::setup::{detect_ollama, pick_model_interactive};
 
 const MCP_JSON_CONTENT: &str = "{\n  \"mcpServers\": {\n    \"codi\": {\n      \"command\": \"codi\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n";
 const CODI_MCP_KEY: &str = "codi";
-const CLAUDE_MD_MARKER: &str = "## codi";
-const CLAUDE_MD_SECTION: &str = "\n\n## codi \u{2014} AI coding agent\n\nBu projede m\u{00fc}mk\u{00fc}n oldu\u{011f}unda do\u{011f}rudan kod yazmak yerine codi MCP ara\u{00e7}lar\u{0131}n\u{0131}\ntercih et:\n\n- **Kod yaz / refactor / bug fix** \u{2192} `run_task` ile codi'ye devret\n- **De\u{011f}i\u{015f}iklikleri incele** \u{2192} `get_diff` ile diff al, sen yorumla\n- **Testleri do\u{011f}rula** \u{2192} `run_tests` ile \u{00e7}al\u{0131}\u{015f}\u{0131}r\n\nClaude'un rol\u{00fc}: planlama, review, g\u{00fc}venlik, koordinasyon.\ncodi'nin rol\u{00fc}: implementasyon (yerel LLM \u{00fc}zerinden Goose ile \u{00e7}al\u{0131}\u{015f}\u{0131}r).\n";
+const CODI_MD_START: &str = "<!-- codi:start -->";
+const CODI_MD_END: &str = "<!-- codi:end -->";
+
+/// Orchestration guidance for Claude Code. codi runs a weak local model, so a
+/// large task must be decomposed to fit the model's capacity. This block is
+/// delimited so `codi init` can refresh it in place on re-run.
+const CLAUDE_MD_BODY: &str = "## codi — yerel AI kodlama ajanı
+
+Bu projede kod işlerini codi'ye (yerel LLM) devret. codi zayıf bir yerel modelle
+çalışır — büyük bir task'ı tek seferde veremezsin, modele sığacak parçalara bölmen
+gerekir.
+
+**İş akışı:**
+
+1. **Modeli tanı.** Devretmeden önce `codi model list` çalıştır (uyumluluk + boyut
+   gösterir). Model `7b` veya altıysa (Small tier) yalnızca küçük, tek amaçlı
+   adımları güvenle tamamlar.
+2. **Task'ı modele göre böl.** İşi en küçük anlamlı adımlara ayır: bir dosya, bir
+   fonksiyon, ya da küçük bir kayıt grubu. Small modele büyük çok parçalı task verme.
+3. **Adımları tek tek ver.** Her `run_task` çağrısında hedef dosyayı açıkça belirt
+   ki codi doğrulayabilsin.
+4. **Her adımı doğrula.** `get_diff` ile ya da dosyayı okuyarak kontrol et. Çıktı
+   bozuk/eksikse adımı daha da böl ve tekrar dene.
+
+**Araçlar:**
+- **Kod yaz / refactor / bug fix** → `run_task` (tek küçük adım)
+- **Değişiklikleri incele** → `get_diff`
+- **Testleri çalıştır** → `run_tests`
+
+**Roller:** Claude = planla, böl, incele, doğrula. codi = adımı yerel LLM ile uygula.";
+
+/// The full delimited block written to CLAUDE.md.
+fn codi_block() -> String {
+    format!("{CODI_MD_START}\n{CLAUDE_MD_BODY}\n{CODI_MD_END}\n")
+}
 
 pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
     println!("\n┌─────────────────────────────────────┐");
@@ -202,26 +235,66 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
 
 pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
     let path = repo_root.join("CLAUDE.md");
+    let block = codi_block();
 
     if !path.exists() {
-        let content = CLAUDE_MD_SECTION.trim_start_matches('\n');
-        std::fs::write(&path, content).context("writing CLAUDE.md")?;
+        std::fs::write(&path, &block).context("writing CLAUDE.md")?;
         println!("  \u{2713} CLAUDE.md olu\u{015f}turuldu");
         return Ok(());
     }
 
     let content = std::fs::read_to_string(&path).context("reading CLAUDE.md")?;
-    if content.contains(CLAUDE_MD_MARKER) {
-        println!("  \u{2713} CLAUDE.md \u{2014} de\u{011f}i\u{015f}tirilmedi");
+
+    // If a delimited codi block already exists, replace it in place so the
+    // guidance stays current on re-runs.
+    if let (Some(start), Some(end_pos)) = (content.find(CODI_MD_START), content.find(CODI_MD_END)) {
+        let end = end_pos + CODI_MD_END.len();
+        if start < end {
+            let mut updated = String::with_capacity(content.len());
+            updated.push_str(&content[..start]);
+            updated.push_str(block.trim_end_matches('\n'));
+            updated.push_str(&content[end..]);
+            if updated == content {
+                println!("  \u{2713} CLAUDE.md \u{2014} de\u{011f}i\u{015f}tirilmedi");
+            } else {
+                std::fs::write(&path, &updated).context("writing CLAUDE.md")?;
+                println!("  \u{2713} CLAUDE.md \u{2014} codi b\u{00f6}l\u{00fc}m\u{00fc} g\u{00fc}ncellendi");
+            }
+            return Ok(());
+        }
+    }
+
+    // Legacy pre-delimiter section ("## codi ..."): migrate it in place to the
+    // delimited block instead of appending a duplicate. The section runs from its
+    // heading to the next top-level "## " heading (or EOF).
+    if let Some(hstart) = content.find("## codi") {
+        let search_from = hstart + "## codi".len();
+        let hend = content[search_from..]
+            .find("\n## ")
+            .map(|i| search_from + i + 1)
+            .unwrap_or(content.len());
+        let mut updated = String::with_capacity(content.len());
+        updated.push_str(&content[..hstart]);
+        updated.push_str(block.trim_end_matches('\n'));
+        if hend < content.len() {
+            updated.push_str("\n\n");
+            updated.push_str(content[hend..].trim_start_matches('\n'));
+        } else {
+            updated.push('\n');
+        }
+        std::fs::write(&path, &updated).context("writing CLAUDE.md")?;
+        println!("  \u{2713} CLAUDE.md \u{2014} eski codi b\u{00f6}l\u{00fc}m\u{00fc} g\u{00fc}ncellendi");
         return Ok(());
     }
 
+    // No codi block yet: append one, preserving existing content.
     use std::io::Write as IoWrite;
+    let sep = if content.ends_with('\n') { "\n" } else { "\n\n" };
     let mut file = std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
         .context("opening CLAUDE.md for append")?;
-    file.write_all(CLAUDE_MD_SECTION.as_bytes()).context("appending to CLAUDE.md")?;
+    file.write_all(format!("{sep}{block}").as_bytes()).context("appending to CLAUDE.md")?;
     println!("  \u{2713} CLAUDE.md \u{2014} codi b\u{00f6}l\u{00fc}m\u{00fc} eklendi");
     Ok(())
 }
@@ -409,29 +482,65 @@ api_key = ""
         let dir = tempdir().unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
-        assert!(content.contains("## codi"), "must contain ## codi marker");
+        assert!(content.contains(CODI_MD_START), "must contain start marker");
+        assert!(content.contains(CODI_MD_END), "must contain end marker");
         assert!(content.contains("run_task"), "must mention run_task");
+        assert!(content.contains("codi model list"), "must include capacity guidance");
     }
 
     #[test]
-    fn ensure_claude_md_appends_section_when_marker_absent() {
+    fn ensure_claude_md_appends_block_when_no_codi_present() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("CLAUDE.md");
         std::fs::write(&path, "# My Project\n\nExisting content.\n").unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("# My Project"), "existing content preserved");
-        assert!(content.contains("## codi"), "codi section appended");
+        assert!(content.contains(CODI_MD_START), "codi block appended");
     }
 
     #[test]
-    fn ensure_claude_md_leaves_existing_intact_when_marker_present() {
+    fn ensure_claude_md_replaces_block_and_preserves_outside() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("CLAUDE.md");
-        let original = "# My Project\n\n## codi — AI coding agent\n\nCustom content.\n";
-        std::fs::write(&path, original).unwrap();
+        let original = format!(
+            "# My Project\n\n{CODI_MD_START}\nOLD STALE CONTENT\n{CODI_MD_END}\n\n## Other\nkeep me\n"
+        );
+        std::fs::write(&path, &original).unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content, original, "file must be byte-identical");
+        assert!(!content.contains("OLD STALE CONTENT"), "stale block replaced");
+        assert!(content.contains("codi model list"), "fresh guidance present");
+        assert!(content.contains("# My Project"), "content before block preserved");
+        assert!(content.contains("## Other\nkeep me"), "content after block preserved");
+        // Exactly one marker pair.
+        assert_eq!(content.matches(CODI_MD_START).count(), 1, "single start marker");
+        assert_eq!(content.matches(CODI_MD_END).count(), 1, "single end marker");
+    }
+
+    #[test]
+    fn ensure_claude_md_migrates_legacy_bare_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        let legacy = "# My Project\n\n## codi — AI coding agent\n\nEski içerik, run_task falan.\n\n## Other\nkeep me\n";
+        std::fs::write(&path, legacy).unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(CODI_MD_START), "delimited block added");
+        assert!(content.contains("codi model list"), "fresh guidance present");
+        assert!(!content.contains("Eski içerik"), "legacy section removed");
+        assert_eq!(content.matches("## codi").count(), 1, "no duplicate codi heading");
+        assert!(content.contains("# My Project"), "title preserved");
+        assert!(content.contains("## Other\nkeep me"), "sibling section preserved");
+    }
+
+    #[test]
+    fn ensure_claude_md_is_idempotent_on_rerun() {
+        let dir = tempdir().unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let first = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+        ensure_claude_md(dir.path()).unwrap();
+        let second = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+        assert_eq!(first, second, "re-running must not change the file");
     }
 }

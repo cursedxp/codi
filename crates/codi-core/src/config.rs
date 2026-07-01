@@ -213,6 +213,9 @@ pub struct ReliabilityConfig {
     pub log_events: bool,
     /// Relative path from repo root. Must not contain '..' or be absolute.
     pub log_path: String,
+    /// Wall-clock limit for a single non-interactive goose run. A stuck goose
+    /// is killed after this many seconds instead of hanging codi forever.
+    pub timeout_secs: u64,
 }
 
 impl Default for ReliabilityConfig {
@@ -226,6 +229,7 @@ impl Default for ReliabilityConfig {
             escalate_on_retry_failure: true,
             log_events: true,
             log_path: ".codi/reliability.jsonl".to_string(),
+            timeout_secs: 600,
         }
     }
 }

@@ -5,7 +5,8 @@
 //! keeps our build fast and hermetic and insulates us from upstream churn.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
@@ -45,7 +46,7 @@ pub fn run_session(
     std::fs::write(&goose_cfg_path, goose_cfg)
         .context("writing session goose config")?;
 
-    let mut cmd = build_command(&goose_bin, &goose_cfg_path, &mode, repo_root);
+    let mut cmd = build_command(&goose_bin, &goose_cfg_path, &mode, repo_root, &cfg.safety);
 
     tracing::debug!(
         goose_bin = %goose_bin.display(),
@@ -53,11 +54,24 @@ pub fn run_session(
         "launching goose"
     );
 
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to execute goose binary at {}", goose_bin.display()))?;
-
-    Ok(status.code().unwrap_or(1))
+    match mode {
+        // The interactive REPL is driven by the user and may idle for minutes;
+        // a wall-clock timeout would kill an active session, so it has none.
+        SessionMode::Interactive => {
+            let status = cmd.status().with_context(|| {
+                format!("failed to execute goose binary at {}", goose_bin.display())
+            })?;
+            Ok(status.code().unwrap_or(1))
+        }
+        // One-shot runs are unattended; guard them so a stuck goose can't hang
+        // codi forever.
+        SessionMode::OneShot(_) => {
+            let mut child = cmd.spawn().with_context(|| {
+                format!("failed to execute goose binary at {}", goose_bin.display())
+            })?;
+            wait_with_timeout(&mut child, Duration::from_secs(cfg.reliability.timeout_secs))
+        }
+    }
 }
 
 /// Locate the goose binary: first try the explicit config path, then PATH.
@@ -150,11 +164,26 @@ fn build_goose_config(
     )
 }
 
+/// Goose's tool-approval policy (`GOOSE_MODE`). Goose defaults to
+/// `smart_approve`, which prompts on stdin before writing files or running
+/// commands. When we drive Goose non-interactively (`stdin = /dev/null`) that
+/// prompt can never be answered and Goose blocks forever — so a non-interactive
+/// run must always be `auto`. Only the interactive REPL, where the user can
+/// actually answer, honours the confirm flags.
+fn goose_mode(safety: &SafetyConfig, interactive: bool) -> &'static str {
+    if interactive && (safety.confirm_commands || safety.confirm_writes) {
+        "smart_approve"
+    } else {
+        "auto"
+    }
+}
+
 fn build_command(
     goose_bin: &Path,
     cfg_path: &Path,
     mode: &SessionMode,
     repo_root: &Path,
+    safety: &SafetyConfig,
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new(goose_bin);
     cmd.current_dir(repo_root);
@@ -166,13 +195,16 @@ fn build_command(
     match mode {
         SessionMode::Interactive => {
             // `goose session` (or bare `goose`) starts the interactive REPL.
+            cmd.env("GOOSE_MODE", goose_mode(safety, true));
             cmd.arg("session");
             cmd.stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
         }
         SessionMode::OneShot(task) => {
-            // `goose run --text "<task>"` runs non-interactively.
+            // `goose run --text "<task>"` runs non-interactively. stdin is null,
+            // so Goose must auto-approve tool calls or it hangs on the prompt.
+            cmd.env("GOOSE_MODE", goose_mode(safety, false));
             cmd.args(["run", "--text", task]);
             cmd.arg("--system").arg(crate::standards::CODING_STANDARDS);
             cmd.stdin(Stdio::null())
@@ -181,6 +213,31 @@ fn build_command(
         }
     }
     cmd
+}
+
+/// Wait for `child` to exit, killing it if it runs longer than `timeout`.
+/// Returns the exit code on clean exit, or an error if the deadline was hit
+/// (the child is killed and reaped before returning). Poll-based so it needs
+/// no extra dependency and works on every platform.
+fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<i32> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().context("polling goose subprocess")? {
+            Some(status) => return Ok(status.code().unwrap_or(1)),
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!(
+                        "goose subprocess exceeded the {}s timeout and was killed; \
+                         it made no progress (check the model endpoint and GOOSE_MODE)",
+                        timeout.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 /// Append `--provider <p> --model <m>` so CLI flags override both the global
@@ -242,6 +299,9 @@ pub fn run_session_mcp(
     // prompt + tool schemas consume ~1.5k tokens, leaving almost nothing for the
     // task. Truncated schemas cause silent tool-call failures.
     cmd.env("OLLAMA_NUM_CTX", "8192");
+    // MCP mode runs Goose with stdin=null; it must auto-approve tool calls or it
+    // blocks forever on the approval prompt.
+    cmd.env("GOOSE_MODE", goose_mode(&cfg.safety, false));
     cmd.args(["run", "--text", task]);
     // CLI flags override both Goose's global config file and env vars, ensuring
     // the model selected in codi.toml is actually used.
@@ -271,11 +331,7 @@ pub fn run_session_mcp(
         });
     }
 
-    let status = child
-        .wait()
-        .with_context(|| format!("waiting for goose at {}", goose_bin.display()))?;
-
-    Ok(status.code().unwrap_or(1))
+    wait_with_timeout(&mut child, Duration::from_secs(cfg.reliability.timeout_secs))
 }
 
 /// Generate a description of what `provider` is, for display to the user.
@@ -420,5 +476,78 @@ mod hook_tests {
         let cfg = Config::default();
         // No changed files, exit_code=0, no clippy warnings → no signals
         assert!(post_run_hook(&cfg, dir.path(), 0).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn wait_with_timeout_kills_hung_process() {
+        // Would run far longer than the timeout: stands in for a stuck goose.
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let start = Instant::now();
+        let res = wait_with_timeout(&mut child, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        assert!(res.is_err(), "expected timeout error, got {res:?}");
+        assert!(elapsed < Duration::from_secs(5), "should return promptly, took {elapsed:?}");
+        // The child must actually be killed, not left running.
+        assert!(child.try_wait().expect("try_wait").is_some(), "child not reaped after timeout");
+    }
+
+    #[test]
+    fn wait_with_timeout_returns_exit_code_for_fast_process() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 3"])
+            .spawn()
+            .expect("spawn sh");
+        let code = wait_with_timeout(&mut child, Duration::from_secs(5)).expect("should finish");
+        assert_eq!(code, 3);
+    }
+
+    #[test]
+    fn goose_mode_null_stdin_is_always_auto() {
+        // With stdin=/dev/null an approval prompt would deadlock, so any
+        // non-interactive run must auto-approve regardless of confirm flags.
+        let mut s = SafetyConfig { confirm_commands: true, confirm_writes: true };
+        assert_eq!(goose_mode(&s, false), "auto");
+        s.confirm_commands = false;
+        s.confirm_writes = false;
+        assert_eq!(goose_mode(&s, false), "auto");
+    }
+
+    #[test]
+    fn goose_mode_interactive_respects_confirm() {
+        let confirm = SafetyConfig { confirm_commands: true, confirm_writes: true };
+        assert_eq!(goose_mode(&confirm, true), "smart_approve");
+        let no_confirm = SafetyConfig { confirm_commands: false, confirm_writes: false };
+        assert_eq!(goose_mode(&no_confirm, true), "auto");
+    }
+
+    #[test]
+    fn build_command_sets_goose_mode_auto_for_oneshot() {
+        let safety = SafetyConfig::default(); // confirm both true
+        let cmd = build_command(
+            Path::new("/bin/echo"),
+            Path::new("/nonexistent.yaml"),
+            &SessionMode::OneShot("do thing".into()),
+            Path::new("/tmp"),
+            &safety,
+        );
+        let mode = cmd
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("GOOSE_MODE"))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned());
+        assert_eq!(mode.as_deref(), Some("auto"));
     }
 }
