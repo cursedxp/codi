@@ -32,12 +32,21 @@ codi run "Add a validate_email() function with unit tests"
 Pull a model that supports structured tool calls (required for Goose):
 
 ```bash
-ollama pull qwen2.5:7b      # recommended — reliable tool-call support
-# or: llama3.1:8b, mistral:7b, phi4-mini:3.8b
+ollama pull gemma4:e4b      # recommended — safe edit behaviour (fails clean, never clobbers)
+# or: qwen2.5:7b, llama3.1:8b, mistral:7b
 ollama serve                 # keep running in a background terminal
 ```
 
-> **Model compatibility:** `qwen2.5-coder:7b` does NOT work with Goose (returns tool calls as text). Use `qwen2.5:7b` instead. Run `codi model check <name>` to verify any model.
+> **Model compatibility:** `qwen2.5-coder:7b` does NOT work with Goose (returns tool calls as text). Run `codi model check <name>` to verify any model.
+
+> **Context length (important):** Ollama's default context window (~4k tokens) is too small for agent work — Goose's system prompt alone nearly fills it. The symptom is silent: the model never emits the write tool call, so tasks fail with `no_diff` or produce truncated/hallucinated content. Create a larger-context derivative and use that:
+>
+> ```bash
+> printf 'FROM gemma4:e4b\nPARAMETER num_ctx 16384\n' | ollama create gemma4-e4b-16k -f -
+> codi model set gemma4-e4b-16k
+> ```
+>
+> In field testing this single change took the same model from failing at ~20-line files to writing 130-line files byte-perfect.
 
 ---
 
@@ -103,7 +112,7 @@ codi model check qwen2.5:7b
 ```toml
 [model.local]
 base_url = "http://localhost:11434/v1"
-model    = "qwen2.5:7b"
+model    = "gemma4-e4b-16k"            # num_ctx-raised derivative — see Prerequisites
 api_key  = ""                          # not needed for Ollama
 
 [model.cloud]                          # optional — only used when routing escalates
@@ -128,7 +137,41 @@ db_path     = ".codi/index.sqlite"
 [safety]
 confirm_commands = true                # set false for CI / unattended runs
 confirm_writes   = true
+
+[reliability]
+enabled                   = true
+model_tier                = ""         # "small" | "medium" | "large" | "" (auto from model name)
+verify_artifacts          = true       # verify files actually changed after write tasks
+max_retries               = 1          # local retries before escalation
+escalate_on_retry_failure = true       # needs [model.cloud] configured, otherwise skipped
+log_events                = true
+log_path                  = ".codi/reliability.jsonl"
+timeout_secs              = 600        # kill a stuck one-shot goose run after this
 ```
+
+### Reliability layer
+
+Small local models fail in characteristic ways: they write nothing (silent no-op), clobber a file they were asked to append to, or drift off-task. Every `codi run` / `run_task` passes through a guard that catches these instead of reporting false success:
+
+1. **Classify** — write-intent and complexity are detected from the task text. Model tier comes from the model name (`7b` → Small, `14b` → Medium, unknown → Large) and sets the decompose threshold.
+2. **Decompose** — multi-file tasks split into one step per file. Every step carries the **full task text**; only the focus differs.
+3. **Verify** — after each step: exit code, expected files exist, and the filesystem snapshot actually saw a write (git-independent). Append-style tasks ("append", "do not remove"…) additionally snapshot the target's content first — if the run drops it, the step fails with `content_lost`.
+4. **Retry** — failed steps retry with a failure-specific prompt; a `content_lost` retry carries the original content back so the model can restore it.
+5. **Escalate** — when retries are exhausted and `[model.cloud]` is configured, the step re-runs against the cloud model.
+6. **Log** — every attempt is appended to `.codi/reliability.jsonl` (intermediate failures as `"retrying"`). `codi doctor` summarizes the recent success rate.
+
+```bash
+codi doctor        # health check: config, Ollama, MCP registration, reliability stats
+cat .codi/reliability.jsonl | jq .
+```
+
+### Field notes: choosing a local model
+
+Observed on a real project build (June 2026), worth more than benchmarks:
+
+- **Fix the context window first.** Both models below failed identically on ~20+ line files until `num_ctx` was raised to 16384 — the bottleneck was mechanical, not model intelligence. See the context-length note under Prerequisites.
+- **`gemma4:e4b`** — never corrupted a file; its failures were clean no-ops (`no_diff`), which the reliability layer catches and retries. Detected as Large tier, so no decompose overhead. Recommended.
+- **`qwen2.5:7b`** — handled single-shot creates well, but on edit/append tasks it twice destroyed file content. Its name pins it to Small tier (threshold 2), so multi-signal tasks constantly decompose. Use only for small, single-purpose steps.
 
 ### Routing modes
 
@@ -337,7 +380,13 @@ cargo test -p codi-rag        # BM25, chunking, RRF, embeddings
 Make sure Goose is installed and on PATH: `which goose`. Install with `brew install block-goose-cli`.
 
 **Model doesn't respond / tool calls don't work**
-Run `codi model check <name>` to verify. Use `qwen2.5:7b` or `llama3.1:8b` — not `qwen2.5-coder:7b`.
+Run `codi model check <name>` to verify. Use `gemma4:e4b` or `qwen2.5:7b` — not `qwen2.5-coder:7b`.
+
+**Tasks fail with `no_diff` / model writes nothing on longer tasks**
+Almost always Ollama's default ~4k context window: Goose's system prompt + your task overflow it and the model never emits the write tool call. Create a `num_ctx 16384` derivative (see Prerequisites) — don't waste time swapping models first.
+
+**`codi init` says "No function-calling models found" but models are installed**
+Tool support is read from Ollama's `/api/show` capabilities (instant). On Ollama versions too old to report capabilities, codi falls back to live inference probes, which can time out when several large models are installed — upgrade Ollama (≥ 0.6).
 
 **Wizard appears unexpectedly in CI**
 In headless environments (no HOME dir), the wizard is suppressed automatically. If it still appears, create a minimal `codi.toml`:
