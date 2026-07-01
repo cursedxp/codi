@@ -121,7 +121,7 @@ fn main() -> Result<()> {
             Some(Cmd::Model { .. }) | Some(Cmd::Mcp) | Some(Cmd::Doctor { .. }) | Some(Cmd::Init { .. })
         );
         if !skip {
-            println!("Bu proje henüz yapılandırılmamış. Başlamak için:\n\n  codi init\n");
+            println!("This project isn't configured yet. To get started:\n\n  codi init\n");
             return Ok(());
         }
     }

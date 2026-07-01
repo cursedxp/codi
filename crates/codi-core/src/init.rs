@@ -11,30 +11,31 @@ const CODI_MD_END: &str = "<!-- codi:end -->";
 /// Orchestration guidance for Claude Code. codi runs a weak local model, so a
 /// large task must be decomposed to fit the model's capacity. This block is
 /// delimited so `codi init` can refresh it in place on re-run.
-const CLAUDE_MD_BODY: &str = "## codi — yerel AI kodlama ajanı
+const CLAUDE_MD_BODY: &str = "## codi — local AI coding agent
 
-Bu projede kod işlerini codi'ye (yerel LLM) devret. codi zayıf bir yerel modelle
-çalışır — büyük bir task'ı tek seferde veremezsin, modele sığacak parçalara bölmen
-gerekir.
+Delegate coding work in this project to codi (a local LLM). codi runs a weak
+local model — it cannot take a large task in one shot; split the work into
+pieces that fit the model.
 
-**İş akışı:**
+**Workflow:**
 
-1. **Modeli tanı.** Devretmeden önce `codi model list` çalıştır (uyumluluk + boyut
-   gösterir). Model `7b` veya altıysa (Small tier) yalnızca küçük, tek amaçlı
-   adımları güvenle tamamlar.
-2. **Task'ı modele göre böl.** İşi en küçük anlamlı adımlara ayır: bir dosya, bir
-   fonksiyon, ya da küçük bir kayıt grubu. Small modele büyük çok parçalı task verme.
-3. **Adımları tek tek ver.** Her `run_task` çağrısında hedef dosyayı açıkça belirt
-   ki codi doğrulayabilsin.
-4. **Her adımı doğrula.** `get_diff` ile ya da dosyayı okuyarak kontrol et. Çıktı
-   bozuk/eksikse adımı daha da böl ve tekrar dene.
+1. **Know the model.** Run `codi model list` before delegating (shows
+   compatibility + size). If the model is `7b` or smaller (Small tier), it only
+   completes small, single-purpose steps reliably.
+2. **Split the task to fit the model.** Break the work into the smallest
+   meaningful steps: one file, one function, or a small group of records. Never
+   hand a Small model a large multi-part task.
+3. **Send steps one at a time.** Name the target file explicitly in every
+   `run_task` call so codi can verify it.
+4. **Verify every step.** Check with `get_diff` or by reading the file. If the
+   output is broken or incomplete, split the step further and retry.
 
-**Araçlar:**
-- **Kod yaz / refactor / bug fix** → `run_task` (tek küçük adım)
-- **Değişiklikleri incele** → `get_diff`
-- **Testleri çalıştır** → `run_tests`
+**Tools:**
+- **Write code / refactor / bug fix** → `run_task` (one small step)
+- **Review changes** → `get_diff`
+- **Run tests** → `run_tests`
 
-**Roller:** Claude = planla, böl, incele, doğrula. codi = adımı yerel LLM ile uygula.";
+**Roles:** Claude = plan, split, review, verify. codi = execute the step with the local LLM.";
 
 /// The full delimited block written to CLAUDE.md.
 fn codi_block() -> String {
@@ -47,15 +48,15 @@ pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
     println!("└─────────────────────────────────────┘\n");
 
     // [1/6] Ollama
-    println!("[1/6] Ollama kontrolü");
+    println!("[1/6] Ollama check");
     let base_url = detect_ollama().map_err(|e| {
-        println!("✗ Ollama bulunamadı. Kur: brew install ollama && ollama serve");
+        println!("✗ Ollama not found. Install: brew install ollama && ollama serve");
         e
     })?;
-    println!("  ✓ Ollama çalışıyor ({})", base_url);
+    println!("  ✓ Ollama running ({})", base_url);
 
     // [2/6] Model
-    println!("[2/6] Model seçimi");
+    println!("[2/6] Model selection");
     let model = select_model(repo_root, &base_url, rewrite_config)?;
 
     // [3/6] codi.toml
@@ -67,14 +68,14 @@ pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
     ensure_mcp_json(repo_root)?;
 
     // [5/6] MCP registration
-    println!("[5/6] MCP kaydı");
+    println!("[5/6] MCP registration");
     register_mcp_claude();
 
     // [6/6] CLAUDE.md
     println!("[6/6] CLAUDE.md");
     ensure_claude_md(repo_root)?;
 
-    println!("\nTamamlandı. Şimdi Claude Code'u bu projede açıp kullanmaya başlayabilirsin.");
+    println!("\nDone. Open Claude Code in this project to start using codi.");
     Ok(())
 }
 
@@ -83,14 +84,14 @@ fn select_model(repo_root: &Path, base_url: &str, rewrite_config: bool) -> Resul
     if !rewrite_config && toml_path.exists() {
         if let Some(m) = read_model_from_file(&toml_path) {
             if model_is_installed(base_url, &m) {
-                println!("  ✓ {} mevcut — korunuyor", m);
+                println!("  ✓ {} present — keeping it", m);
                 return Ok(m);
             } else {
-                println!("  ⚠ {} Ollama'da yüklü değil", m);
+                println!("  ⚠ {} not installed in Ollama", m);
             }
         }
     }
-    match pick_model_interactive(base_url, "Model seçin:")? {
+    match pick_model_interactive(base_url, "Select a model:")? {
         Some(p) => Ok(p.model),
         None => anyhow::bail!("setup cancelled by user"),
     }
@@ -110,9 +111,9 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
         let content = fresh.to_toml().context("serializing config")?;
         std::fs::write(&toml_path, content).context("writing codi.toml")?;
         if rewrite_config {
-            println!("  ✓ codi.toml yeniden oluşturuldu");
+            println!("  ✓ codi.toml recreated");
         } else {
-            println!("  ✓ codi.toml oluşturuldu");
+            println!("  ✓ codi.toml created");
         }
         return Ok(());
     }
@@ -152,9 +153,9 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
 
     std::fs::write(&toml_path, &merged_str).context("writing codi.toml")?;
     if added == 0 {
-        println!("  ✓ codi.toml — değiştirilmedi");
+        println!("  ✓ codi.toml — unchanged");
     } else {
-        println!("  ✓ codi.toml — {} eksik alan eklendi", added);
+        println!("  ✓ codi.toml — {} missing field(s) added", added);
     }
     Ok(())
 }
@@ -190,7 +191,7 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
 
     if !path.exists() {
         std::fs::write(&path, MCP_JSON_CONTENT).context("writing .mcp.json")?;
-        println!("  ✓ .mcp.json oluşturuldu");
+        println!("  ✓ .mcp.json created");
         return Ok(());
     }
 
@@ -202,7 +203,7 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
                 .and_then(|s| s.get(CODI_MCP_KEY))
                 .is_some();
             if has_codi {
-                println!("  ✓ .mcp.json — değiştirilmedi");
+                println!("  ✓ .mcp.json — unchanged");
             } else {
                 if let Some(servers) = json
                     .as_object_mut()
@@ -220,14 +221,14 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
                 }
                 let pretty = serde_json::to_string_pretty(&json).context("serializing .mcp.json")?;
                 std::fs::write(&path, pretty).context("writing .mcp.json")?;
-                println!("  ✓ .mcp.json — codi kaydı eklendi");
+                println!("  ✓ .mcp.json — codi entry added");
             }
         }
         Err(_) => {
             std::fs::write(repo_root.join(".mcp.json.bak"), &content)
                 .context("writing .mcp.json.bak")?;
             std::fs::write(&path, MCP_JSON_CONTENT).context("writing .mcp.json")?;
-            println!("  ⚠ .mcp.json bozuktu — .mcp.json.bak olarak yedeklendi, yeniden oluşturuldu");
+            println!("  ⚠ .mcp.json was corrupt — backed up as .mcp.json.bak, recreated");
         }
     }
     Ok(())
@@ -239,7 +240,7 @@ pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
 
     if !path.exists() {
         std::fs::write(&path, &block).context("writing CLAUDE.md")?;
-        println!("  \u{2713} CLAUDE.md olu\u{015f}turuldu");
+        println!("  \u{2713} CLAUDE.md created");
         return Ok(());
     }
 
@@ -255,10 +256,10 @@ pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
             updated.push_str(block.trim_end_matches('\n'));
             updated.push_str(&content[end..]);
             if updated == content {
-                println!("  \u{2713} CLAUDE.md \u{2014} de\u{011f}i\u{015f}tirilmedi");
+                println!("  \u{2713} CLAUDE.md \u{2014} unchanged");
             } else {
                 std::fs::write(&path, &updated).context("writing CLAUDE.md")?;
-                println!("  \u{2713} CLAUDE.md \u{2014} codi b\u{00f6}l\u{00fc}m\u{00fc} g\u{00fc}ncellendi");
+                println!("  \u{2713} CLAUDE.md \u{2014} codi section updated");
             }
             return Ok(());
         }
@@ -283,7 +284,7 @@ pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
             updated.push('\n');
         }
         std::fs::write(&path, &updated).context("writing CLAUDE.md")?;
-        println!("  \u{2713} CLAUDE.md \u{2014} eski codi b\u{00f6}l\u{00fc}m\u{00fc} g\u{00fc}ncellendi");
+        println!("  \u{2713} CLAUDE.md \u{2014} legacy codi section migrated");
         return Ok(());
     }
 
@@ -295,7 +296,7 @@ pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
         .open(&path)
         .context("opening CLAUDE.md for append")?;
     file.write_all(format!("{sep}{block}").as_bytes()).context("appending to CLAUDE.md")?;
-    println!("  \u{2713} CLAUDE.md \u{2014} codi b\u{00f6}l\u{00fc}m\u{00fc} eklendi");
+    println!("  \u{2713} CLAUDE.md \u{2014} codi section appended");
     Ok(())
 }
 
@@ -307,8 +308,8 @@ fn register_mcp_claude() {
         .status();
 
     if matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-        println!("  [\u{2139}] MCP kayd\u{0131} atland\u{0131} \u{2014} claude CLI y\u{00fc}kl\u{00fc} de\u{011f}il.");
-        println!("      Manuel kay\u{0131}t: claude mcp add codi -- codi mcp");
+        println!("  [\u{2139}] MCP registration skipped \u{2014} claude CLI not installed.");
+        println!("      Manual registration: claude mcp add codi -- codi mcp");
         return;
     }
 
@@ -321,10 +322,10 @@ fn register_mcp_claude() {
         .unwrap_or(false);
 
     if ok {
-        println!("  ✓ MCP kaydı yapıldı (claude mcp add codi)");
+        println!("  ✓ MCP registered (claude mcp add codi)");
     } else {
-        println!("  ⚠ MCP kaydı başarısız.");
-        println!("      Manuel kayıt: claude mcp add codi -- codi mcp");
+        println!("  ⚠ MCP registration failed.");
+        println!("      Manual registration: claude mcp add codi -- codi mcp");
     }
 }
 
@@ -522,13 +523,13 @@ api_key = ""
     fn ensure_claude_md_migrates_legacy_bare_section() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("CLAUDE.md");
-        let legacy = "# My Project\n\n## codi — AI coding agent\n\nEski içerik, run_task falan.\n\n## Other\nkeep me\n";
+        let legacy = "# My Project\n\n## codi — AI coding agent\n\nOld content, mentions run_task.\n\n## Other\nkeep me\n";
         std::fs::write(&path, legacy).unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains(CODI_MD_START), "delimited block added");
         assert!(content.contains("codi model list"), "fresh guidance present");
-        assert!(!content.contains("Eski içerik"), "legacy section removed");
+        assert!(!content.contains("Old content"), "legacy section removed");
         assert_eq!(content.matches("## codi").count(), 1, "no duplicate codi heading");
         assert!(content.contains("# My Project"), "title preserved");
         assert!(content.contains("## Other\nkeep me"), "sibling section preserved");

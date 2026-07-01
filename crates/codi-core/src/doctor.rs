@@ -39,9 +39,9 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
     if toml_path.exists() {
         let model = read_model_from_toml(&toml_path).unwrap_or_default();
         let detail = if model.is_empty() {
-            "mevcut".to_string()
+            "present".to_string()
         } else {
-            format!("mevcut (model: {model})")
+            format!("present (model: {model})")
         };
         checks.push(CheckResult {
             id: CheckId::CodiToml,
@@ -56,8 +56,8 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
             id: CheckId::CodiToml,
             name: "codi.toml",
             severity: Severity::Error,
-            detail: "dosya yok".to_string(),
-            suggestion: Some("codi init \u{00e7}al\u{0131}\u{015f}t\u{0131}r".to_string()),
+            detail: "missing".to_string(),
+            suggestion: Some("run codi init".to_string()),
             fixable: false, // --fix does not create codi.toml; user must run codi init
         });
     }
@@ -71,7 +71,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
                 id: CheckId::Ollama,
                 name: "Ollama",
                 severity: Severity::Ok,
-                detail: "\u{00e7}al\u{0131}\u{015f}\u{0131}yor".to_string(),
+                detail: "running".to_string(),
                 suggestion: None,
                 fixable: false,
             });
@@ -84,7 +84,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
                     id: CheckId::Ollama,
                     name: "Ollama",
                     severity: Severity::Ok,
-                    detail: format!("\u{00e7}al\u{0131}\u{015f}\u{0131}yor \u{2014} {model} y\u{00fc}kl\u{00fc}"),
+                    detail: format!("running \u{2014} {model} installed"),
                     suggestion: None,
                     fixable: false,
                 });
@@ -93,7 +93,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
                     id: CheckId::Ollama,
                     name: "Ollama",
                     severity: Severity::Ok,
-                    detail: "\u{00e7}al\u{0131}\u{015f}\u{0131}yor".to_string(),
+                    detail: "running".to_string(),
                     suggestion: None,
                     fixable: false,
                 });
@@ -101,7 +101,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
                     id: CheckId::Model,
                     name: "model",
                     severity: Severity::Error,
-                    detail: format!("{model} Ollama'da y\u{00fc}kl\u{00fc} de\u{011f}il"),
+                    detail: format!("{model} not installed in Ollama"),
                     suggestion: Some(format!("ollama pull {model}")),
                     fixable: false,
                 });
@@ -112,7 +112,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
             id: CheckId::Ollama,
             name: "Ollama",
             severity: Severity::Error,
-            detail: "ula\u{015f}\u{0131}lam\u{0131}yor (http://localhost:11434)".to_string(),
+            detail: "unreachable (http://localhost:11434)".to_string(),
             suggestion: Some("ollama serve".to_string()),
             fixable: false,
         });
@@ -133,7 +133,7 @@ pub fn run_doctor(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>> {
                 id: CheckId::SelfImprovement,
                 name: "self_improvement",
                 severity: Severity::Warning,
-                detail: "a\u{00e7}\u{0131}k\u{00e7}a yap\u{0131}land\u{0131}r\u{0131}lmam\u{0131}\u{015f} \u{2014} varsay\u{0131}lan de\u{011f}erler kullan\u{0131}l\u{0131}yor".to_string(),
+                detail: "not explicitly configured \u{2014} using defaults".to_string(),
                 suggestion: Some("codi.toml'a [self_improvement] ekle".to_string()),
                 fixable: false,
             });
@@ -161,11 +161,11 @@ pub fn run_doctor_fix(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>
                 match crate::init::ensure_mcp_json(repo_root) {
                     Ok(()) => {
                         check.severity = Severity::Ok;
-                        check.detail = "d\u{00fc}zeltildi".to_string();
+                        check.detail = "fixed".to_string();
                         check.suggestion = None;
                     }
                     Err(e) => {
-                        check.detail = format!("d\u{00fc}zeltme ba\u{015f}ar\u{0131}s\u{0131}z: {e:#}");
+                        check.detail = format!("fix failed: {e:#}");
                     }
                 }
             }
@@ -179,21 +179,21 @@ pub fn run_doctor_fix(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>
                     .unwrap_or(false);
                 if ok {
                     check.severity = Severity::Ok;
-                    check.detail = "MCP kayd\u{0131} yap\u{0131}ld\u{0131}".to_string();
+                    check.detail = "MCP registered".to_string();
                     check.suggestion = None;
                 } else {
-                    check.detail = format!("{} (d\u{00fc}zeltme ba\u{015f}ar\u{0131}s\u{0131}z)", check.detail);
+                    check.detail = format!("{} (fix failed)", check.detail);
                 }
             }
             CheckId::ClaudeMd => {
                 match crate::init::ensure_claude_md(repo_root) {
                     Ok(()) => {
                         check.severity = Severity::Ok;
-                        check.detail = "d\u{00fc}zeltildi".to_string();
+                        check.detail = "fixed".to_string();
                         check.suggestion = None;
                     }
                     Err(e) => {
-                        check.detail = format!("d\u{00fc}zeltme ba\u{015f}ar\u{0131}s\u{0131}z: {e:#}");
+                        check.detail = format!("fix failed: {e:#}");
                     }
                 }
             }
@@ -235,16 +235,16 @@ pub fn print_doctor_report(checks: &[CheckResult]) -> bool {
     println!();
     let mut parts: Vec<String> = Vec::new();
     if error_count > 0 {
-        parts.push(format!("{error_count} sorun bulundu"));
+        parts.push(format!("{error_count} error(s) found"));
     }
     if warning_count > 0 {
-        parts.push(format!("{warning_count} uyard\u{0131}"));
+        parts.push(format!("{warning_count} warning(s)"));
     }
     if !parts.is_empty() {
         println!("{}", parts.join(", "));
     }
     if fixable_count > 0 {
-        println!("Otomatik d\u{00fc}zeltilebilir: codi doctor --fix");
+        println!("Auto-fixable: codi doctor --fix");
     }
 
     error_count > 0
@@ -261,7 +261,7 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
             id: CheckId::McpJson,
             name: ".mcp.json",
             severity: Severity::Error,
-            detail: "dosya yok".to_string(),
+            detail: "missing".to_string(),
             suggestion: Some("codi doctor --fix".to_string()),
             fixable: true,
         };
@@ -273,7 +273,7 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
                 id: CheckId::McpJson,
                 name: ".mcp.json",
                 severity: Severity::Error,
-                detail: "okunamad\u{0131}".to_string(),
+                detail: "unreadable".to_string(),
                 suggestion: Some("codi doctor --fix".to_string()),
                 fixable: true,
             };
@@ -287,7 +287,7 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
                     id: CheckId::McpJson,
                     name: ".mcp.json",
                     severity: Severity::Ok,
-                    detail: "mevcut \u{2014} codi kayd\u{0131} var".to_string(),
+                    detail: "present \u{2014} codi entry found".to_string(),
                     suggestion: None,
                     fixable: false,
                 }
@@ -296,7 +296,7 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
                     id: CheckId::McpJson,
                     name: ".mcp.json",
                     severity: Severity::Error,
-                    detail: "codi kayd\u{0131} eksik".to_string(),
+                    detail: "codi entry missing".to_string(),
                     suggestion: Some("codi doctor --fix".to_string()),
                     fixable: true,
                 }
@@ -307,7 +307,7 @@ fn check_mcp_json(repo_root: &Path) -> CheckResult {
             name: ".mcp.json",
             severity: Severity::Error,
             detail: "bozuk JSON".to_string(),
-            suggestion: Some("codi doctor --fix (yedekler ve yeniden olu\u{015f}turur)".to_string()),
+            suggestion: Some("codi doctor --fix (backs up and recreates)".to_string()),
             fixable: true,
         },
     }
@@ -323,15 +323,15 @@ fn check_claude_mcp_registration() -> CheckResult {
     match output {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => CheckResult {
             id: CheckId::McpRegistration,
-            name: "MCP kayd\u{0131}",
+            name: "MCP registration",
             severity: Severity::Info,
-            detail: "claude CLI y\u{00fc}kl\u{00fc} de\u{011f}il \u{2014} MCP iste\u{011f}e ba\u{011f}l\u{0131}".to_string(),
+            detail: "claude CLI not installed \u{2014} MCP optional".to_string(),
             suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
             fixable: false,
         },
         Err(_) => CheckResult {
             id: CheckId::McpRegistration,
-            name: "MCP kayd\u{0131}",
+            name: "MCP registration",
             severity: Severity::Info,
             detail: "kontrol edilemedi".to_string(),
             suggestion: Some("claude mcp add codi -- codi mcp".to_string()),
@@ -346,18 +346,18 @@ fn check_claude_mcp_registration() -> CheckResult {
             if codi_registered {
                 CheckResult {
                     id: CheckId::McpRegistration,
-                    name: "MCP kayd\u{0131}",
+                    name: "MCP registration",
                     severity: Severity::Ok,
-                    detail: "codi kay\u{0131}tl\u{0131}".to_string(),
+                    detail: "codi registered".to_string(),
                     suggestion: None,
                     fixable: false,
                 }
             } else {
                 CheckResult {
                     id: CheckId::McpRegistration,
-                    name: "MCP kayd\u{0131}",
+                    name: "MCP registration",
                     severity: Severity::Error,
-                    detail: "codi kay\u{0131}tl\u{0131} de\u{011f}il".to_string(),
+                    detail: "codi not registered".to_string(),
                     suggestion: Some("codi doctor --fix".to_string()),
                     fixable: true,
                 }
@@ -373,7 +373,7 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
             id: CheckId::ClaudeMd,
             name: "CLAUDE.md",
             severity: Severity::Error,
-            detail: "dosya yok".to_string(),
+            detail: "missing".to_string(),
             suggestion: Some("codi doctor --fix".to_string()),
             fixable: true,
         };
@@ -384,7 +384,7 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
             id: CheckId::ClaudeMd,
             name: "CLAUDE.md",
             severity: Severity::Ok,
-            detail: "codi delegasyon talimat\u{0131} mevcut".to_string(),
+            detail: "codi delegation guidance present".to_string(),
             suggestion: None,
             fixable: false,
         }
@@ -393,7 +393,7 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
             id: CheckId::ClaudeMd,
             name: "CLAUDE.md",
             severity: Severity::Error,
-            detail: "codi b\u{00f6}l\u{00fc}m\u{00fc} eksik".to_string(),
+            detail: "codi section missing".to_string(),
             suggestion: Some("codi doctor --fix".to_string()),
             fixable: true,
         }
@@ -588,7 +588,7 @@ mod tests {
                 id: CheckId::CodiToml,
                 name: "codi.toml",
                 severity: Severity::Ok,
-                detail: "mevcut".to_string(),
+                detail: "present".to_string(),
                 suggestion: None,
                 fixable: false,
             },
@@ -610,7 +610,7 @@ mod tests {
             id: CheckId::McpJson,
             name: ".mcp.json",
             severity: Severity::Error,
-            detail: "dosya yok".to_string(),
+            detail: "missing".to_string(),
             suggestion: None,
             fixable: true,
         }];
