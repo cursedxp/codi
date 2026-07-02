@@ -61,6 +61,8 @@ pub enum VerificationFailReason {
     NonZeroExit(i32),
     /// Append-style task: pre-existing content of these files vanished.
     ContentLost(Vec<String>),
+    /// A file the model wrote does not parse; detail is the checker's error.
+    SyntaxError { file: String, detail: String },
 }
 
 impl VerificationFailReason {
@@ -70,6 +72,7 @@ impl VerificationFailReason {
             Self::MissingPaths(paths) => format!("missing_paths:{}", paths.join(",")),
             Self::NonZeroExit(code) => format!("nonzero_exit:{code}"),
             Self::ContentLost(paths) => format!("content_lost:{}", paths.join(",")),
+            Self::SyntaxError { file, .. } => format!("syntax_error:{file}"),
         }
     }
 }
@@ -490,6 +493,115 @@ fn lost_content_files(repo_root: &Path, before: &HashMap<String, String>) -> Vec
     lost
 }
 
+// ── Syntax gate ──────────────────────────────────────────────────────────────
+
+fn node_available() -> bool {
+    static NODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NODE.get_or_init(|| {
+        std::process::Command::new("node")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
+fn check_js_syntax(path: &Path) -> Option<String> {
+    if !node_available() {
+        return None;
+    }
+    let out = std::process::Command::new("node").arg("--check").arg(path).output().ok()?;
+    if out.status.success() {
+        None
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Some(stderr.lines().take(4).collect::<Vec<_>>().join("\n"))
+    }
+}
+
+fn check_json_syntax(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&content)
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// Structural tags that must balance. Void/self-closing elements are excluded.
+const HTML_PAIRED_TAGS: &[&str] = &[
+    "html", "head", "body", "header", "main", "section", "footer", "nav",
+    "div", "table", "thead", "tbody", "tr", "ul", "ol", "select", "form",
+];
+
+/// Cheap open/close balance count per structural tag. Script/style bodies and
+/// comments are stripped first so markup inside JS strings can't miscount.
+fn check_html_balance(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?.to_lowercase();
+    let mut content = raw;
+    for (open, close) in [("<script", "</script>"), ("<style", "</style>"), ("<!--", "-->")] {
+        while let (Some(s), Some(e)) = (content.find(open), content.find(close)) {
+            if e <= s { break; }
+            // Remove the whole block, delimiters included, so neither the
+            // block body nor the tags themselves are counted.
+            content.replace_range(s..e + close.len(), "");
+        }
+    }
+    let count = |needle: &str, boundary: bool| {
+        content.match_indices(needle).filter(|(i, _)| {
+            if !boundary { return true; }
+            // Opening tag: name must end at whitespace, '>' or '/'.
+            content[i + needle.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
+        }).count()
+    };
+    for tag in HTML_PAIRED_TAGS {
+        let opens = count(&format!("<{tag}"), true);
+        let closes = count(&format!("</{tag}>"), false);
+        if opens != closes {
+            return Some(format!("<{tag}>: {opens} opening vs {closes} closing tags"));
+        }
+    }
+    None
+}
+
+/// First syntax problem among the files this attempt wrote, if any.
+fn syntax_gate(files: &[PathBuf]) -> Option<(String, String)> {
+    for f in files.iter().take(20) {
+        let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let err = match ext {
+            "js" | "mjs" | "cjs" => check_js_syntax(f),
+            "json" => check_json_syntax(f),
+            "html" | "htm" => check_html_balance(f),
+            _ => None,
+        };
+        if let Some(detail) = err {
+            return Some((f.display().to_string(), detail));
+        }
+    }
+    None
+}
+
+/// Files added or modified between two snapshots (deletions excluded — they
+/// can't be syntax-checked).
+fn files_written(
+    before: &HashMap<PathBuf, SystemTime>,
+    after: &HashMap<PathBuf, SystemTime>,
+) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = after
+        .iter()
+        .filter(|(p, mt)| match before.get(*p) {
+            Some(old) => *mt > old,
+            None => true,
+        })
+        .map(|(p, _)| p.clone())
+        .collect();
+    v.sort();
+    v
+}
+
 /// Run one engine attempt while snapshotting the tree before and after, so we
 /// can tell whether the model actually changed any files without relying on git.
 fn run_and_detect(
@@ -497,11 +609,12 @@ fn run_and_detect(
     task: &str,
     repo_root: &Path,
     ctx: &RunContext,
-) -> Result<(i32, bool)> {
+) -> Result<(i32, bool, Vec<PathBuf>)> {
     let before = snapshot_mtimes(repo_root);
     let exit = run_engine(cfg, task, repo_root, ctx)?;
     let after = snapshot_mtimes(repo_root);
-    Ok((exit, tree_changed(&before, &after)))
+    let written = files_written(&before, &after);
+    Ok((exit, tree_changed(&before, &after), written))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -561,17 +674,21 @@ fn execute_with_guard(
     } else {
         HashMap::new()
     };
-    let verify_full = |exit_code: i32, changed: bool| -> VerificationResult {
+    let verify_full = |exit_code: i32, changed: bool, written: &[PathBuf]| -> VerificationResult {
         let v = verify_step(step, profile, repo_root, exit_code, changed);
         if !matches!(v, VerificationResult::Pass) {
             return v;
         }
         let lost = lost_content_files(repo_root, &before_contents);
-        if lost.is_empty() {
-            VerificationResult::Pass
-        } else {
-            VerificationResult::Fail(VerificationFailReason::ContentLost(lost))
+        if !lost.is_empty() {
+            return VerificationResult::Fail(VerificationFailReason::ContentLost(lost));
         }
+        if cfg.reliability.syntax_check && profile.write_intent && profile.verify_artifacts {
+            if let Some((file, detail)) = syntax_gate(written) {
+                return VerificationResult::Fail(VerificationFailReason::SyntaxError { file, detail });
+            }
+        }
+        VerificationResult::Pass
     };
 
     // Whether a failed attempt will be followed by another (retry or cloud).
@@ -579,7 +696,7 @@ fn execute_with_guard(
         cfg.reliability.escalate_on_retry_failure && cfg.model.cloud.is_some();
 
     // Attempt 1 — local model
-    let (exit_code, changed) = match run_and_detect(cfg, &step.description, repo_root, ctx) {
+    let (exit_code, changed, written) = match run_and_detect(cfg, &step.description, repo_root, ctx) {
         Ok(pair) => pair,
         Err(e) => {
             tracing::error!(step = step_index, error = %e, "engine error on attempt 1");
@@ -594,7 +711,7 @@ fn execute_with_guard(
             return (false, events);
         }
     };
-    let v1 = verify_full(exit_code, changed);
+    let v1 = verify_full(exit_code, changed, &written);
 
     if matches!(v1, VerificationResult::Pass) {
         let event = build_event(
@@ -644,6 +761,12 @@ fn execute_with_guard(
                 "Previous attempt failed with exit code {code}. Try again: {}",
                 step.description
             ),
+            VerificationFailReason::SyntaxError { file, detail } => format!(
+                "The file {file} you wrote has a syntax error:\n{detail}\n\
+                 Fix {file} so it parses cleanly. Change only what the error \
+                 requires; keep the rest of the file as is. Original task: {}",
+                step.description
+            ),
             VerificationFailReason::ContentLost(files) => {
                 let mut originals = String::new();
                 for f in files {
@@ -664,7 +787,7 @@ fn execute_with_guard(
             }
         };
 
-        let (retry_exit, retry_changed) = match run_and_detect(cfg, &retry_prompt, repo_root, ctx) {
+        let (retry_exit, retry_changed, retry_written) = match run_and_detect(cfg, &retry_prompt, repo_root, ctx) {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!(step = step_index, attempt = attempt_num, error = %e, "engine error on retry");
@@ -679,7 +802,7 @@ fn execute_with_guard(
                 return (false, events);
             }
         };
-        let v_retry = verify_full(retry_exit, retry_changed);
+        let v_retry = verify_full(retry_exit, retry_changed, &retry_written);
 
         if matches!(v_retry, VerificationResult::Pass) {
             let event = build_event(
@@ -726,7 +849,7 @@ fn execute_with_guard(
         let mut cloud_cfg = cfg.clone();
         cloud_cfg.routing.mode = RoutingMode::CloudPreferred;
 
-        let (esc_exit, esc_changed) = match run_and_detect(&cloud_cfg, &step.description, repo_root, ctx) {
+        let (esc_exit, esc_changed, esc_written) = match run_and_detect(&cloud_cfg, &step.description, repo_root, ctx) {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!(step = step_index, error = %e, "engine error on cloud escalation");
@@ -741,7 +864,7 @@ fn execute_with_guard(
                 return (false, events);
             }
         };
-        let v_esc = verify_full(esc_exit, esc_changed);
+        let v_esc = verify_full(esc_exit, esc_changed, &esc_written);
 
         let (outcome, ok) = match &v_esc {
             VerificationResult::Pass => ("escalation_success", true),
@@ -1331,6 +1454,91 @@ mod tests {
             VerificationFailReason::ContentLost(vec!["data.js".to_string()]).to_log_string(),
             "content_lost:data.js"
         );
+    }
+
+    // ── Syntax gate ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn syntax_gate_catches_broken_js() {
+        if !node_available() { return; } // CI without node: skip
+        let dir = tempdir().unwrap();
+        write_file(dir.path(), "data.js", "const A = [{id: 1; cost: 2}];\n");
+        let hit = syntax_gate(&[dir.path().join("data.js")]);
+        assert!(hit.is_some(), "semicolon inside object literal must fail node --check");
+
+        write_file(dir.path(), "ok.js", "const A = [{id: 1, cost: 2}];\n");
+        assert!(syntax_gate(&[dir.path().join("ok.js")]).is_none());
+    }
+
+    #[test]
+    fn syntax_gate_catches_broken_json() {
+        let dir = tempdir().unwrap();
+        write_file(dir.path(), "cfg.json", "{\"a\": 1,}\n");
+        assert!(syntax_gate(&[dir.path().join("cfg.json")]).is_some());
+        write_file(dir.path(), "ok.json", "{\"a\": 1}\n");
+        assert!(syntax_gate(&[dir.path().join("ok.json")]).is_none());
+    }
+
+    #[test]
+    fn html_balance_catches_stray_closing_tag() {
+        let dir = tempdir().unwrap();
+        // The exact failure from the field: an orphan extra </header>
+        write_file(
+            dir.path(), "index.html",
+            "<html><body><header><h1>x</h1></header></header><main></main></body></html>",
+        );
+        let err = check_html_balance(&dir.path().join("index.html"));
+        assert!(err.is_some());
+        assert!(err.unwrap().contains("header"));
+    }
+
+    #[test]
+    fn html_balance_passes_valid_page_and_ignores_script_strings() {
+        let dir = tempdir().unwrap();
+        write_file(
+            dir.path(), "index.html",
+            "<html><head><style>div{color:red}</style></head><body>\
+             <div id=\"app\"></div>\
+             <script>el.innerHTML = '<div class=\"row\">' + x;</script>\
+             </body></html>",
+        );
+        assert!(check_html_balance(&dir.path().join("index.html")).is_none());
+    }
+
+    #[test]
+    fn html_balance_ignores_unknown_and_void_tags() {
+        let dir = tempdir().unwrap();
+        write_file(
+            dir.path(), "index.html",
+            "<html><body><input><br><img src=\"x\"><span>t</span></body></html>",
+        );
+        assert!(check_html_balance(&dir.path().join("index.html")).is_none());
+    }
+
+    #[test]
+    fn files_written_reports_added_and_modified_only() {
+        let mut before = std::collections::HashMap::new();
+        before.insert(std::path::PathBuf::from("/x/kept.js"), t(100));
+        before.insert(std::path::PathBuf::from("/x/gone.js"), t(100));
+        before.insert(std::path::PathBuf::from("/x/edited.js"), t(100));
+        let mut after = std::collections::HashMap::new();
+        after.insert(std::path::PathBuf::from("/x/kept.js"), t(100));
+        after.insert(std::path::PathBuf::from("/x/edited.js"), t(200));
+        after.insert(std::path::PathBuf::from("/x/new.js"), t(200));
+        let written = files_written(&before, &after);
+        assert_eq!(written, vec![
+            std::path::PathBuf::from("/x/edited.js"),
+            std::path::PathBuf::from("/x/new.js"),
+        ]);
+    }
+
+    #[test]
+    fn syntax_error_log_string() {
+        let r = VerificationFailReason::SyntaxError {
+            file: "data.js".to_string(),
+            detail: "Unexpected token ';'".to_string(),
+        };
+        assert_eq!(r.to_log_string(), "syntax_error:data.js");
     }
 
     // ── Task 6: ReliabilityEvent and log helpers ─────────────────────────────

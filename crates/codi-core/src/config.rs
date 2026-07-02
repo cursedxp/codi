@@ -216,6 +216,10 @@ pub struct ReliabilityConfig {
     /// Wall-clock limit for a single non-interactive goose run. A stuck goose
     /// is killed after this many seconds instead of hanging codi forever.
     pub timeout_secs: u64,
+    /// Syntax-check files the model wrote (node --check for JS, JSON parse,
+    /// HTML tag balance) and retry locally on failure, instead of reporting
+    /// success on syntactically broken output.
+    pub syntax_check: bool,
 }
 
 impl Default for ReliabilityConfig {
@@ -230,6 +234,7 @@ impl Default for ReliabilityConfig {
             log_events: true,
             log_path: ".codi/reliability.jsonl".to_string(),
             timeout_secs: 600,
+            syntax_check: true,
         }
     }
 }
