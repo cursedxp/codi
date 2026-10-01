@@ -119,8 +119,9 @@ pub fn set_model(repo_root: &Path, model_name: Option<&str>) -> Result<()> {
 /// Print available models without changing anything.
 pub fn list_available_models(base_url: &str) -> Result<()> {
     // Single round-trip to /api/tags via list_models.
-    let models = list_models(base_url)
-        .with_context(|| format!("Ollama is not running at {base_url}. Start it with: ollama serve"))?;
+    let models = list_models(base_url).with_context(|| {
+        format!("Ollama is not running at {base_url}. Start it with: ollama serve")
+    })?;
     if models.is_empty() {
         println!("No models installed. Pull one with: ollama pull qwen2.5:7b");
         return Ok(());
@@ -161,10 +162,7 @@ pub fn check_model(base_url: &str, model: &str) -> Result<()> {
 
 /// Detect Ollama at the default or configured URL. Returns the base_url.
 pub(crate) fn detect_ollama() -> Result<String> {
-    let candidates = [
-        "http://localhost:11434/v1",
-        "http://127.0.0.1:11434/v1",
-    ];
+    let candidates = ["http://localhost:11434/v1", "http://127.0.0.1:11434/v1"];
     for url in candidates {
         if is_running(url) {
             return Ok(url.to_string());
@@ -183,8 +181,9 @@ pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<Pic
     // (fast — no inference). Only models that pass are returned.
     print!("  Scanning installed models for function-calling support...");
     io::stdout().flush()?;
-    let models = list_models(base_url)
-        .with_context(|| format!("Ollama is not running at {base_url}. Start it with: ollama serve"))?;
+    let models = list_models(base_url).with_context(|| {
+        format!("Ollama is not running at {base_url}. Start it with: ollama serve")
+    })?;
     println!();
 
     if models.is_empty() {
@@ -196,14 +195,17 @@ pub fn pick_model_interactive(base_url: &str, prompt: &str) -> Result<Option<Pic
 
     println!("\n{prompt}");
     println!("{}", "─".repeat(58));
-    println!(
-        "  {:<4} {:<30} {:>6}  ★=coding",
-        "#", "Model", "Size"
-    );
+    println!("  {:<4} {:<30} {:>6}  ★=coding", "#", "Model", "Size");
     println!("{}", "─".repeat(58));
     for (i, m) in models.iter().enumerate() {
         let coding = if m.known_coding { " ★" } else { "" };
-        println!("  [{:>2}] {:<30} {:>6.1} GB{}", i + 1, m.name, m.size_gb, coding);
+        println!(
+            "  [{:>2}] {:<30} {:>6.1} GB{}",
+            i + 1,
+            m.name,
+            m.size_gb,
+            coding
+        );
     }
     println!("{}", "─".repeat(58));
     println!("  [ q] Quit without changing anything");

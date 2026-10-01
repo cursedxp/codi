@@ -138,8 +138,8 @@ impl Default for RagConfig {
                 ".codi/**".to_string(),
             ],
             extensions: vec![
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "rb", "c", "h",
-                "cpp", "hpp", "md", "toml", "yaml", "yml", "json",
+                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "rb", "c", "h", "cpp", "hpp",
+                "md", "toml", "yaml", "yml", "json",
             ]
             .into_iter()
             .map(String::from)
@@ -216,6 +216,10 @@ pub struct ReliabilityConfig {
     /// Wall-clock limit for a single non-interactive goose run. A stuck goose
     /// is killed after this many seconds instead of hanging codi forever.
     pub timeout_secs: u64,
+    /// Syntax-check files the model wrote (node --check for JS, JSON parse,
+    /// HTML tag balance) and retry locally on failure, instead of reporting
+    /// success on syntactically broken output.
+    pub syntax_check: bool,
 }
 
 impl Default for ReliabilityConfig {
@@ -230,6 +234,7 @@ impl Default for ReliabilityConfig {
             log_events: true,
             log_path: ".codi/reliability.jsonl".to_string(),
             timeout_secs: 600,
+            syntax_check: true,
         }
     }
 }
@@ -395,11 +400,14 @@ base_url = "http://localhost:9999/v1"
 
     #[test]
     fn self_improvement_partial_override() {
-        let c = Config::from_toml(r#"
+        let c = Config::from_toml(
+            r#"
 [self_improvement]
 enabled = false
 max_auto_per_run = 5
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         assert!(!c.self_improvement.enabled);
         assert_eq!(c.self_improvement.max_auto_per_run, 5);
         // unset field inherits default
@@ -429,12 +437,15 @@ max_auto_per_run = 5
 
     #[test]
     fn reliability_partial_override() {
-        let c = Config::from_toml(r#"
+        let c = Config::from_toml(
+            r#"
 [reliability]
 enabled = false
 max_retries = 0
 model_tier = "small"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         assert!(!c.reliability.enabled);
         assert_eq!(c.reliability.max_retries, 0);
         assert_eq!(c.reliability.model_tier, "small");

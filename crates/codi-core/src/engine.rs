@@ -38,13 +38,11 @@ pub fn run_session(
     let provider = pick_provider(cfg, task);
 
     let session_dir = repo_root.join(".codi").join("session");
-    std::fs::create_dir_all(&session_dir)
-        .context("creating .codi/session/ dir")?;
+    std::fs::create_dir_all(&session_dir).context("creating .codi/session/ dir")?;
 
     let goose_cfg_path = session_dir.join("goose-session.yaml");
     let goose_cfg = build_goose_config(&cfg.safety, &provider, rag_socket, context_snippets);
-    std::fs::write(&goose_cfg_path, goose_cfg)
-        .context("writing session goose config")?;
+    std::fs::write(&goose_cfg_path, goose_cfg).context("writing session goose config")?;
 
     let mut cmd = build_command(&goose_bin, &goose_cfg_path, &mode, repo_root, &cfg.safety);
 
@@ -69,7 +67,10 @@ pub fn run_session(
             let mut child = cmd.spawn().with_context(|| {
                 format!("failed to execute goose binary at {}", goose_bin.display())
             })?;
-            wait_with_timeout(&mut child, Duration::from_secs(cfg.reliability.timeout_secs))
+            wait_with_timeout(
+                &mut child,
+                Duration::from_secs(cfg.reliability.timeout_secs),
+            )
         }
     }
 }
@@ -87,7 +88,7 @@ pub fn locate_goose(cfg: &Config) -> Result<PathBuf> {
     which_goose().context(
         "could not find a 'goose' binary on PATH. \
          Install Block's Goose (https://github.com/block/goose) \
-         or set goose_bin in codi.toml."
+         or set goose_bin in codi.toml.",
     )
 }
 
@@ -115,7 +116,11 @@ fn build_goose_config(
         Provider::Local(m) => {
             // Goose reads OPENAI_BASE_URL for custom endpoints; OPENAI_API_KEY
             // is required but can be any non-empty string for Ollama.
-            let key = if m.api_key.is_empty() { "ollama".to_string() } else { m.api_key.clone() };
+            let key = if m.api_key.is_empty() {
+                "ollama".to_string()
+            } else {
+                m.api_key.clone()
+            };
             format!(
                 "GOOSE_PROVIDER: openai\nOPENAI_BASE_URL: {}\nGOOSE_MODEL: {}\nOPENAI_API_KEY: {}\n",
                 m.base_url, m.model, key
@@ -148,10 +153,7 @@ fn build_goose_config(
     let context_note = if context_snippets.is_empty() {
         String::new()
     } else {
-        format!(
-            "# Retrieved context:\n{}\n",
-            context_snippets
-        )
+        format!("# Retrieved context:\n{}\n", context_snippets)
     };
 
     let safety_note = format!(
@@ -257,7 +259,9 @@ fn append_provider_flags(cmd: &mut std::process::Command, provider: &Provider) {
 /// Goose primarily reads provider settings from environment variables.
 /// Parse our generated YAML's simple `KEY: value` lines and set them.
 fn set_env_from_yaml_if_needed(cmd: &mut std::process::Command, yaml_path: &Path) {
-    let Ok(text) = std::fs::read_to_string(yaml_path) else { return };
+    let Ok(text) = std::fs::read_to_string(yaml_path) else {
+        return;
+    };
     for line in text.lines() {
         if line.starts_with('#') || line.starts_with(' ') {
             continue;
@@ -331,7 +335,10 @@ pub fn run_session_mcp(
         });
     }
 
-    wait_with_timeout(&mut child, Duration::from_secs(cfg.reliability.timeout_secs))
+    wait_with_timeout(
+        &mut child,
+        Duration::from_secs(cfg.reliability.timeout_secs),
+    )
 }
 
 /// Generate a description of what `provider` is, for display to the user.
@@ -368,9 +375,8 @@ pub fn post_run_hook(cfg: &Config, repo_root: &Path, goose_exit_code: i32) -> Re
     let changed_files = git_changed_files(repo_root);
     let clippy_output = run_clippy_capture(repo_root);
 
-    let signals = crate::signals::collect_signals(
-        repo_root, &clippy_output, &changed_files, goose_exit_code,
-    );
+    let signals =
+        crate::signals::collect_signals(repo_root, &clippy_output, &changed_files, goose_exit_code);
     if signals.signals.is_empty() {
         return Ok(());
     }
@@ -499,9 +505,15 @@ mod guard_tests {
         let res = wait_with_timeout(&mut child, Duration::from_millis(200));
         let elapsed = start.elapsed();
         assert!(res.is_err(), "expected timeout error, got {res:?}");
-        assert!(elapsed < Duration::from_secs(5), "should return promptly, took {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "should return promptly, took {elapsed:?}"
+        );
         // The child must actually be killed, not left running.
-        assert!(child.try_wait().expect("try_wait").is_some(), "child not reaped after timeout");
+        assert!(
+            child.try_wait().expect("try_wait").is_some(),
+            "child not reaped after timeout"
+        );
     }
 
     #[test]
@@ -518,7 +530,10 @@ mod guard_tests {
     fn goose_mode_null_stdin_is_always_auto() {
         // With stdin=/dev/null an approval prompt would deadlock, so any
         // non-interactive run must auto-approve regardless of confirm flags.
-        let mut s = SafetyConfig { confirm_commands: true, confirm_writes: true };
+        let mut s = SafetyConfig {
+            confirm_commands: true,
+            confirm_writes: true,
+        };
         assert_eq!(goose_mode(&s, false), "auto");
         s.confirm_commands = false;
         s.confirm_writes = false;
@@ -527,9 +542,15 @@ mod guard_tests {
 
     #[test]
     fn goose_mode_interactive_respects_confirm() {
-        let confirm = SafetyConfig { confirm_commands: true, confirm_writes: true };
+        let confirm = SafetyConfig {
+            confirm_commands: true,
+            confirm_writes: true,
+        };
         assert_eq!(goose_mode(&confirm, true), "smart_approve");
-        let no_confirm = SafetyConfig { confirm_commands: false, confirm_writes: false };
+        let no_confirm = SafetyConfig {
+            confirm_commands: false,
+            confirm_writes: false,
+        };
         assert_eq!(goose_mode(&no_confirm, true), "auto");
     }
 

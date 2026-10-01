@@ -4,3 +4,4 @@
 .codi/*.sqlite-*
 .codi/session/
 *.log
+.DS_Store

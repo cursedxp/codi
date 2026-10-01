@@ -1,0 +1,54 @@
+name: Agent task
+description: A small, fully specified task for the writer agent.
+title: "[agent] "
+labels: ["agent:draft"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only the owner (or the architect agent) should open these. Move the label
+        from `agent:draft` to `agent:ready` when the spec is complete.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One or two sentences. What changes for the user of codi?
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to touch (max 3)
+      description: Exact paths. Anything not listed is out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Acceptance checklist
+      description: Checkboxes the writer ticks in the PR. Each one testable.
+      value: |
+        - [ ] 
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: Test names and what they assert. Paste the test code if the architect wrote it.
+    validations:
+      required: true
+  - type: textarea
+    id: forbidden
+    attributes:
+      label: Out of scope / forbidden
+      description: Things the writer must not do for this task.
+    validations:
+      required: false
+  - type: textarea
+    id: architecture
+    attributes:
+      label: Architecture notes
+      description: Link to the relevant section of docs/architecture.md, boundaries to respect.
+    validations:
+      required: false

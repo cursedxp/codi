@@ -28,10 +28,7 @@ pub fn run_review(cfg: &Config, repo_root: &Path, auto_refine: bool) -> Result<R
 
     if diff.trim().is_empty() {
         tracing::info!("no git diff found — nothing to review");
-        return Ok(ReviewResult {
-            diff,
-            exit_code: 0,
-        });
+        return Ok(ReviewResult { diff, exit_code: 0 });
     }
 
     let prompt = build_review_prompt(&diff, auto_refine);

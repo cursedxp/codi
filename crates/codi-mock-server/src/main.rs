@@ -5,7 +5,10 @@ use tracing_subscriber::EnvFilter;
 use codi_mock_server::MockConfig;
 
 #[derive(Parser)]
-#[command(name = "codi-mock-server", about = "OpenAI-compatible mock server for codi testing")]
+#[command(
+    name = "codi-mock-server",
+    about = "OpenAI-compatible mock server for codi testing"
+)]
 struct Cli {
     #[arg(long, default_value = "0")]
     port: u16,

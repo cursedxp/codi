@@ -5,7 +5,7 @@
 //! "architecture"-level keywords) and escalates to the cloud model if a
 //! cloud model is configured. Everything else stays local.
 
-use crate::config::{Config, CloudModel, LocalModel, RoutingMode};
+use crate::config::{CloudModel, Config, LocalModel, RoutingMode};
 
 /// Which provider/model should handle this task.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,8 +67,10 @@ mod tests {
     use crate::config::{CloudModel, Config, RoutingConfig, RoutingMode};
 
     fn cfg_with_cloud(mode: RoutingMode) -> Config {
-        let mut c = Config::default();
-        c.routing = RoutingConfig { mode };
+        let mut c = Config {
+            routing: RoutingConfig { mode },
+            ..Default::default()
+        };
         c.model.cloud = Some(CloudModel {
             provider: "anthropic".to_string(),
             model: "claude-test".to_string(),

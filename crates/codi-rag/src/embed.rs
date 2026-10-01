@@ -68,10 +68,7 @@ pub async fn embed_chunks(
         }
     };
 
-    let embed_resp: EmbedResponse = resp
-        .json()
-        .await
-        .context("parsing embedding response")?;
+    let embed_resp: EmbedResponse = resp.json().await.context("parsing embedding response")?;
 
     let mut count = 0usize;
     for (chunk_id, data) in chunk_ids.iter().zip(embed_resp.data.iter()) {
@@ -149,7 +146,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum();
     let mag_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
     let mag_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
     if mag_a == 0.0 || mag_b == 0.0 {
@@ -159,11 +160,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 }
 
 fn f32_slice_to_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
+// `as_chunks` needs Rust 1.88; workspace MSRV is 1.82.
+#[allow(clippy::chunks_exact_to_as_chunks)]
 fn bytes_to_f32_slice(b: &[u8]) -> Vec<f32> {
     b.chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))

@@ -25,7 +25,10 @@ impl PendingQueue {
                 return Err(e).with_context(|| format!("reading {}", path.display()));
             }
         };
-        Ok(PendingQueue { path: path.to_path_buf(), items })
+        Ok(PendingQueue {
+            path: path.to_path_buf(),
+            items,
+        })
     }
 
     pub fn items(&self) -> &[ImprovementCandidate] {
@@ -42,7 +45,10 @@ impl PendingQueue {
 
     /// Remove and return the candidate with `id`, or `None` if not found.
     pub fn remove(&mut self, id: &str) -> Option<ImprovementCandidate> {
-        self.items.iter().position(|c| c.id == id).map(|i| self.items.remove(i))
+        self.items
+            .iter()
+            .position(|c| c.id == id)
+            .map(|i| self.items.remove(i))
     }
 
     /// Write current items to disk atomically (write-then-rename).
@@ -51,11 +57,10 @@ impl PendingQueue {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        let json = serde_json::to_string_pretty(&self.items)
-            .context("serializing pending queue")?;
+        let json =
+            serde_json::to_string_pretty(&self.items).context("serializing pending queue")?;
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, &json)
-            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::write(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, &self.path)
             .with_context(|| format!("renaming to {}", self.path.display()))?;
         Ok(())
@@ -70,9 +75,12 @@ mod tests {
 
     fn candidate(id: &str, desc: &str) -> ImprovementCandidate {
         ImprovementCandidate {
-            id: id.to_string(), description: desc.to_string(),
-            risk: RiskLevel::High, risk_reason: "test".to_string(),
-            source_signals: vec![], context: "src/lib.rs".to_string(),
+            id: id.to_string(),
+            description: desc.to_string(),
+            risk: RiskLevel::High,
+            risk_reason: "test".to_string(),
+            source_signals: vec![],
+            context: "src/lib.rs".to_string(),
             created_at: 0,
         }
     }

@@ -159,7 +159,9 @@ async fn embeddings(
 }
 
 /// Start the server on a random free port and return the bound address.
-pub async fn start(cfg: MockConfig) -> anyhow::Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>)> {
+pub async fn start(
+    cfg: MockConfig,
+) -> anyhow::Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let app = router(cfg);
