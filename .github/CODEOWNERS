@@ -1,0 +1,11 @@
+# Agent pipeline guardrails — these paths need the owner's review.
+/.github/                                @cursedxp
+/AGENTS.md                               @cursedxp
+/Cargo.toml                              @cursedxp
+/Cargo.lock                              @cursedxp
+/crates/*/Cargo.toml                     @cursedxp
+/crates/*/tests/                         @cursedxp
+/crates/codi-core/src/engine.rs          @cursedxp
+/crates/codi-core/src/reliability.rs     @cursedxp
+/crates/codi-core/src/mcp.rs             @cursedxp
+/crates/codi-core/src/improve.rs         @cursedxp
