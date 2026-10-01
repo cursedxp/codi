@@ -44,11 +44,7 @@ impl<'a> ImprovementExecutor<'a> {
 
     /// Run a low-risk auto-improvement. Enforces blocklist, quota, and clean-state checks.
     /// Increments `auto_count` only on successful application.
-    pub fn run(
-        &self,
-        candidate: &ImprovementCandidate,
-        auto_count: &mut usize,
-    ) -> Result<Outcome> {
+    pub fn run(&self, candidate: &ImprovementCandidate, auto_count: &mut usize) -> Result<Outcome> {
         // Pre-check 1: quota
         if *auto_count >= self.cfg.self_improvement.max_auto_per_run {
             return Ok(Outcome::Skipped {
@@ -88,7 +84,10 @@ impl<'a> ImprovementExecutor<'a> {
 
     /// Run a Claude-approved improvement. Skips blocklist and quota; test+lint gate still applies.
     pub fn run_approved(&self, candidate: &ImprovementCandidate) -> Result<Outcome> {
-        let blocklist_bypassed = self.cfg.self_improvement.blocklist
+        let blocklist_bypassed = self
+            .cfg
+            .self_improvement
+            .blocklist
             .iter()
             .any(|b| candidate.context.contains(b.as_str()));
 
@@ -126,21 +125,26 @@ impl<'a> ImprovementExecutor<'a> {
         );
         let goose_exit = crate::engine::run_session_mcp(self.cfg, &task, None, self.repo_root, "")?;
         if goose_exit != 0 {
-            let reason = format!("Goose exited with code {goose_exit}; changes may be incomplete — rolled back");
+            let reason = format!(
+                "Goose exited with code {goose_exit}; changes may be incomplete — rolled back"
+            );
             git_rollback(self.repo_root, &original_branch, branch)?;
-            append_log(self.repo_root, &LogEntry {
-                id: candidate.id.clone(),
-                description: candidate.description.clone(),
-                risk: format!("{:?}", candidate.risk),
-                branch: branch.to_string(),
-                outcome: "Failed".to_string(),
-                reason: Some(reason.clone()),
-                approved_by_claude,
-                blocklist_bypassed,
-                source_signals: candidate.source_signals.clone(),
-                created_at: candidate.created_at,
-                completed_at: now_secs(),
-            })?;
+            append_log(
+                self.repo_root,
+                &LogEntry {
+                    id: candidate.id.clone(),
+                    description: candidate.description.clone(),
+                    risk: format!("{:?}", candidate.risk),
+                    branch: branch.to_string(),
+                    outcome: "Failed".to_string(),
+                    reason: Some(reason.clone()),
+                    approved_by_claude,
+                    blocklist_bypassed,
+                    source_signals: candidate.source_signals.clone(),
+                    created_at: candidate.created_at,
+                    completed_at: now_secs(),
+                },
+            )?;
             return Ok(Outcome::Failed { reason });
         }
 
@@ -199,8 +203,7 @@ impl<'a> ImprovementExecutor<'a> {
         // Lint gate
         let lint_ok = run_lint_gate(self.repo_root);
         if !lint_ok {
-            let reason =
-                "lint gate failed (cargo clippy -D warnings); rolled back".to_string();
+            let reason = "lint gate failed (cargo clippy -D warnings); rolled back".to_string();
             git_rollback(self.repo_root, &original_branch, branch)?;
             append_log(
                 self.repo_root,
@@ -312,13 +315,21 @@ fn git_rollback(repo_root: &Path, original: &str, improve: &str) -> Result<()> {
         .current_dir(repo_root)
         .status()
         .context("git checkout (rollback)")?;
-    anyhow::ensure!(status.success(), "git checkout {} failed during rollback", original);
+    anyhow::ensure!(
+        status.success(),
+        "git checkout {} failed during rollback",
+        original
+    );
     let ds = std::process::Command::new("git")
         .args(["branch", "-D", improve])
         .current_dir(repo_root)
         .status()
         .context("git branch -D (rollback)")?;
-    anyhow::ensure!(ds.success(), "git branch -D {} failed during rollback", improve);
+    anyhow::ensure!(
+        ds.success(),
+        "git branch -D {} failed during rollback",
+        improve
+    );
     Ok(())
 }
 
@@ -494,39 +505,47 @@ mod tests {
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
         std::process::Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
         std::process::Command::new("git")
             .args(["config", "user.name", "test"])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
         std::fs::write(dir.path().join("README.md"), "hello").unwrap();
         std::process::Command::new("git")
             .args(["add", "."])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
         std::process::Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
 
         // Capture original branch name
         let original_out = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(dir.path())
-            .output().unwrap();
-        let original = String::from_utf8_lossy(&original_out.stdout).trim().to_string();
+            .output()
+            .unwrap();
+        let original = String::from_utf8_lossy(&original_out.stdout)
+            .trim()
+            .to_string();
 
         // Create the improve branch
         let improve_branch = "improve/test-branch";
@@ -535,7 +554,8 @@ mod tests {
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
 
         // Execute rollback via the module's private helper
         git_rollback(dir.path(), &original, improve_branch).unwrap();
@@ -544,15 +564,19 @@ mod tests {
         let current_out = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(dir.path())
-            .output().unwrap();
-        let current = String::from_utf8_lossy(&current_out.stdout).trim().to_string();
+            .output()
+            .unwrap();
+        let current = String::from_utf8_lossy(&current_out.stdout)
+            .trim()
+            .to_string();
         assert_eq!(current, original, "should be back on the original branch");
 
         // Assert the improve branch no longer exists
         let list_out = std::process::Command::new("git")
             .args(["branch", "--list", improve_branch])
             .current_dir(dir.path())
-            .output().unwrap();
+            .output()
+            .unwrap();
         let listed = String::from_utf8_lossy(&list_out.stdout).trim().to_string();
         assert!(listed.is_empty(), "improve branch should have been deleted");
     }
@@ -611,7 +635,8 @@ mod tests {
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().unwrap();
+            .status()
+            .unwrap();
         let stat = git_shortstat(dir.path()).unwrap();
         // shortstat should mention insertions
         assert!(stat.contains("insertion"), "stat={stat:?}");
@@ -636,8 +661,8 @@ mod tests {
         append_log(dir.path(), &entry).unwrap();
         append_log(dir.path(), &entry).unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".codi/improvement_log.jsonl"))
-            .unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".codi/improvement_log.jsonl")).unwrap();
         assert_eq!(content.lines().count(), 2);
         // each line must be valid JSON
         for line in content.lines() {

@@ -168,9 +168,11 @@ pub fn list_models(base_url: &str) -> Result<Vec<OllamaModel>> {
 
     // Sort: known coding models first, then by size descending.
     models.sort_by(|a, b| {
-        b.known_coding
-            .cmp(&a.known_coding)
-            .then(b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal))
+        b.known_coding.cmp(&a.known_coding).then(
+            b.size_gb
+                .partial_cmp(&a.size_gb)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
 
     Ok(models)
@@ -235,8 +237,7 @@ fn check_tool_calls_inner(base_url: &str, model: &str) -> anyhow::Result<bool> {
         anyhow::bail!("HTTP {status}: {text}");
     }
 
-    let json: serde_json::Value =
-        serde_json::from_str(&text).context("parsing JSON response")?;
+    let json: serde_json::Value = serde_json::from_str(&text).context("parsing JSON response")?;
 
     let has_tool_calls = json["choices"][0]["message"]["tool_calls"]
         .as_array()

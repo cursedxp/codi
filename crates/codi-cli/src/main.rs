@@ -109,16 +109,17 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let repo_root = cli
-        .repo
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let repo_root = cli.repo.unwrap_or_else(|| std::env::current_dir().unwrap());
     let repo_root = repo_root.canonicalize().context("resolving repo root")?;
 
     // ── First-launch: no config → print onboarding prompt and exit ──────────
     if is_first_launch(&repo_root) {
         let skip = matches!(
             &cli.command,
-            Some(Cmd::Model { .. }) | Some(Cmd::Mcp) | Some(Cmd::Doctor { .. }) | Some(Cmd::Init { .. })
+            Some(Cmd::Model { .. })
+                | Some(Cmd::Mcp)
+                | Some(Cmd::Doctor { .. })
+                | Some(Cmd::Init { .. })
         );
         if !skip {
             println!("This project isn't configured yet. To get started:\n\n  codi init\n");
@@ -203,8 +204,10 @@ fn cmd_run(cfg: &Config, repo_root: &std::path::Path, task: &str, review: bool) 
     if !outcome.success {
         eprintln!(
             "task failed (exit={}, mode={}, steps={}/{}, reason={})",
-            outcome.exit_code, outcome.execution_mode,
-            outcome.steps_succeeded, outcome.steps_total,
+            outcome.exit_code,
+            outcome.execution_mode,
+            outcome.steps_succeeded,
+            outcome.steps_total,
             outcome.decision_reason,
         );
     }
@@ -229,7 +232,11 @@ fn cmd_index(cfg: &Config, repo_root: &std::path::Path, rebuild: bool) -> Result
     if rebuild && db.exists() {
         std::fs::remove_file(&db).context("removing old index")?;
     }
-    println!("Indexing {} → {} (RAG not yet wired in M3+)", repo_root.display(), db.display());
+    println!(
+        "Indexing {} → {} (RAG not yet wired in M3+)",
+        repo_root.display(),
+        db.display()
+    );
     Ok(())
 }
 
@@ -248,11 +255,7 @@ fn cmd_show_config(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-fn cmd_model(
-    cfg: &Config,
-    repo_root: &std::path::Path,
-    action: Option<ModelCmd>,
-) -> Result<()> {
+fn cmd_model(cfg: &Config, repo_root: &std::path::Path, action: Option<ModelCmd>) -> Result<()> {
     let base_url = &cfg.model.local.base_url;
 
     match action {

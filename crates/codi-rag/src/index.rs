@@ -95,7 +95,7 @@ pub fn chunk_content(content: &str, file_path: &str, max_chars: usize) -> Vec<Ch
     while start < lines.len() {
         let mut end = start;
         let mut size = 0usize;
-        while end < lines.len() && size + lines[end].len() + 1 <= max_chars {
+        while end < lines.len() && size + lines[end].len() < max_chars {
             size += lines[end].len() + 1;
             end += 1;
         }
@@ -149,10 +149,17 @@ mod tests {
 
     #[test]
     fn chunks_respect_max_size() {
-        let content = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_content(&content, "big.txt", 100);
         for c in &chunks {
-            assert!(c.content.len() <= 200, "chunk too large: {}", c.content.len());
+            assert!(
+                c.content.len() <= 200,
+                "chunk too large: {}",
+                c.content.len()
+            );
         }
     }
 }

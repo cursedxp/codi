@@ -11,8 +11,8 @@ pub fn open(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating db directory {}", parent.display()))?;
     }
-    let conn = Connection::open(path)
-        .with_context(|| format!("opening SQLite at {}", path.display()))?;
+    let conn =
+        Connection::open(path).with_context(|| format!("opening SQLite at {}", path.display()))?;
 
     apply_schema(&conn)?;
     Ok(conn)

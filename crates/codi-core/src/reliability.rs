@@ -14,7 +14,10 @@ use crate::engine;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-pub enum RunContext { Cli, Mcp }
+pub enum RunContext {
+    Cli,
+    Mcp,
+}
 
 pub struct ReliabilityOutcome {
     pub success: bool,
@@ -32,9 +35,16 @@ pub struct TaskProfile {
     pub verify_artifacts: bool,
 }
 
-pub enum TaskComplexity { Simple, Complex }
+pub enum TaskComplexity {
+    Simple,
+    Complex,
+}
 
-pub enum ModelTier { Small, Medium, Large }
+pub enum ModelTier {
+    Small,
+    Medium,
+    Large,
+}
 
 pub struct ExecutionPlan {
     pub steps: Vec<TaskStep>,
@@ -62,7 +72,10 @@ pub enum VerificationFailReason {
     /// Append-style task: pre-existing content of these files vanished.
     ContentLost(Vec<String>),
     /// A file the model wrote does not parse; detail is the checker's error.
-    SyntaxError { file: String, detail: String },
+    SyntaxError {
+        file: String,
+        detail: String,
+    },
 }
 
 impl VerificationFailReason {
@@ -80,8 +93,19 @@ impl VerificationFailReason {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const WRITE_KEYWORDS: &[&str] = &[
-    "create", "add", "implement", "fix", "refactor", "modify", "update",
-    "write", "generate", "scaffold", "build", "set up", "init",
+    "create",
+    "add",
+    "implement",
+    "fix",
+    "refactor",
+    "modify",
+    "update",
+    "write",
+    "generate",
+    "scaffold",
+    "build",
+    "set up",
+    "init",
 ];
 
 const READ_KEYWORDS: &[&str] = &[
@@ -89,15 +113,22 @@ const READ_KEYWORDS: &[&str] = &[
 ];
 
 const FILE_EXTENSIONS: &[&str] = &[
-    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".rb",
-    ".c", ".h", ".cpp", ".hpp", ".md", ".toml", ".yaml", ".yml", ".json",
-    ".html", ".htm", ".css", ".scss", ".svg", ".sql", ".sh",
+    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".rb", ".c", ".h", ".cpp", ".hpp",
+    ".md", ".toml", ".yaml", ".yml", ".json", ".html", ".htm", ".css", ".scss", ".svg", ".sql",
+    ".sh",
 ];
 
 const DECOMPOSE_PATTERNS: &[&str] = &[
-    "birden fazla", "multiple files", "several files", "repo kur",
-    "set up repository", "scaffold", "birkaç dosya", "multiple directories",
-    "birkaç klasör", "several directories",
+    "birden fazla",
+    "multiple files",
+    "several files",
+    "repo kur",
+    "set up repository",
+    "scaffold",
+    "birkaç dosya",
+    "multiple directories",
+    "birkaç klasör",
+    "several directories",
 ];
 
 // ── Model tier ────────────────────────────────────────────────────────────────
@@ -113,9 +144,9 @@ pub(crate) fn detect_model_tier(model_name: &str, tier_override: &str) -> ModelT
     // Param-count token must not be preceded by another digit: plain
     // contains("7b") would classify a 27b model as Small.
     let has_size = |needle: &str| {
-        lower.match_indices(needle).any(|(i, _)| {
-            !lower[..i].ends_with(|c: char| c.is_ascii_digit())
-        })
+        lower
+            .match_indices(needle)
+            .any(|(i, _)| !lower[..i].ends_with(|c: char| c.is_ascii_digit()))
     };
     if ["1b", "2b", "3b", "7b", "8b"].iter().any(|s| has_size(s)) {
         ModelTier::Small
@@ -155,7 +186,11 @@ pub(crate) fn extract_file_mentions(task: &str) -> Vec<String> {
             });
             let has_ext = FILE_EXTENSIONS.iter().any(|ext| w.ends_with(ext));
             if has_ext && !w.starts_with('.') && w.len() > 3 {
-                if seen.insert(w.to_string()) { Some(w.to_string()) } else { None }
+                if seen.insert(w.to_string()) {
+                    Some(w.to_string())
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -182,7 +217,11 @@ pub(crate) fn snippet(s: &str, max: usize) -> &str {
 /// script tag), and a referenced file would false-fail as missing_paths.
 fn single_shot_expected_paths(task: &str) -> Vec<String> {
     let mentions = extract_file_mentions(task);
-    if mentions.len() == 1 { mentions } else { Vec::new() }
+    if mentions.len() == 1 {
+        mentions
+    } else {
+        Vec::new()
+    }
 }
 
 fn count_complexity_signals(task: &str) -> u32 {
@@ -213,7 +252,9 @@ fn count_complexity_signals(task: &str) -> u32 {
 pub fn classify_task(task: &str, cfg: &ReliabilityConfig, model_name: &str) -> TaskProfile {
     let write_intent = detect_write_intent(task);
     let tier = detect_model_tier(model_name, &cfg.model_tier);
-    let threshold = cfg.decompose_threshold.unwrap_or_else(|| tier_threshold(&tier));
+    let threshold = cfg
+        .decompose_threshold
+        .unwrap_or_else(|| tier_threshold(&tier));
     let signals = count_complexity_signals(task);
 
     let tier_name = match &tier {
@@ -240,7 +281,12 @@ pub fn classify_task(task: &str, cfg: &ReliabilityConfig, model_name: &str) -> T
         )
     };
 
-    TaskProfile { write_intent, complexity, decision_reason, verify_artifacts: cfg.verify_artifacts }
+    TaskProfile {
+        write_intent,
+        complexity,
+        decision_reason,
+        verify_artifacts: cfg.verify_artifacts,
+    }
 }
 
 // ── Stubs (filled in later tasks) ────────────────────────────────────────────
@@ -249,7 +295,10 @@ pub(crate) fn decompose(task: &str) -> ExecutionPlan {
     let mentioned_files = extract_file_mentions(task);
 
     let steps = if mentioned_files.is_empty() {
-        vec![TaskStep { description: task.to_string(), expected_paths: vec![] }]
+        vec![TaskStep {
+            description: task.to_string(),
+            expected_paths: vec![],
+        }]
     } else if mentioned_files.len() == 1 {
         // Single target: nothing to split. Keep the full task text — truncating
         // it would drop the payload the model is asked to write.
@@ -275,11 +324,16 @@ pub(crate) fn decompose(task: &str) -> ExecutionPlan {
     } else {
         format!(
             "{} file path(s) detected, decomposed into {} step(s): {}",
-            mentioned_files.len(), steps.len(), mentioned_files.join(", ")
+            mentioned_files.len(),
+            steps.len(),
+            mentioned_files.join(", ")
         )
     };
 
-    ExecutionPlan { steps, decision_reason: reason }
+    ExecutionPlan {
+        steps,
+        decision_reason: reason,
+    }
 }
 
 /// Verify a completed step. `changed_detected` is the filesystem-snapshot
@@ -303,7 +357,9 @@ pub(crate) fn verify_step(
     // nothing leaves the file present). Require the snapshot to have seen a
     // write as well.
     if !step.expected_paths.is_empty() {
-        let missing: Vec<String> = step.expected_paths.iter()
+        let missing: Vec<String> = step
+            .expected_paths
+            .iter()
             .filter(|exp| !repo_root.join(exp.as_str()).exists())
             .cloned()
             .collect();
@@ -415,12 +471,17 @@ fn snapshot_mtimes(repo_root: &Path) -> HashMap<PathBuf, SystemTime> {
     let mut map = HashMap::new();
     let mut stack = vec![repo_root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
             if ft.is_dir() {
                 let name = entry.file_name();
-                if VERIFY_EXCLUDE_DIRS.iter().any(|e| name.as_os_str() == std::ffi::OsStr::new(e)) {
+                if VERIFY_EXCLUDE_DIRS
+                    .iter()
+                    .any(|e| name.as_os_str() == std::ffi::OsStr::new(e))
+                {
                     continue;
                 }
                 stack.push(entry.path());
@@ -436,7 +497,10 @@ fn snapshot_mtimes(repo_root: &Path) -> HashMap<PathBuf, SystemTime> {
 
 /// True if any file was added, modified (newer mtime), or removed between two
 /// snapshots.
-fn tree_changed(before: &HashMap<PathBuf, SystemTime>, after: &HashMap<PathBuf, SystemTime>) -> bool {
+fn tree_changed(
+    before: &HashMap<PathBuf, SystemTime>,
+    after: &HashMap<PathBuf, SystemTime>,
+) -> bool {
     after.iter().any(|(p, mt)| match before.get(p) {
         Some(old) => mt > old,
         None => true,
@@ -446,8 +510,13 @@ fn tree_changed(before: &HashMap<PathBuf, SystemTime>, after: &HashMap<PathBuf, 
 // ── Append-clobber guard ─────────────────────────────────────────────────────
 
 const APPEND_MARKERS: &[&str] = &[
-    "append", "do not remove", "don't remove", "keep existing",
-    "keep the existing", "without removing", "after the existing",
+    "append",
+    "do not remove",
+    "don't remove",
+    "keep existing",
+    "keep the existing",
+    "without removing",
+    "after the existing",
 ];
 
 /// Heuristic: the task asks to extend existing content, not replace it.
@@ -512,7 +581,11 @@ fn check_js_syntax(path: &Path) -> Option<String> {
     if !node_available() {
         return None;
     }
-    let out = std::process::Command::new("node").arg("--check").arg(path).output().ok()?;
+    let out = std::process::Command::new("node")
+        .arg("--check")
+        .arg(path)
+        .output()
+        .ok()?;
     if out.status.success() {
         None
     } else {
@@ -530,8 +603,8 @@ fn check_json_syntax(path: &Path) -> Option<String> {
 
 /// Structural tags that must balance. Void/self-closing elements are excluded.
 const HTML_PAIRED_TAGS: &[&str] = &[
-    "html", "head", "body", "header", "main", "section", "footer", "nav",
-    "div", "table", "thead", "tbody", "tr", "ul", "ol", "select", "form",
+    "html", "head", "body", "header", "main", "section", "footer", "nav", "div", "table", "thead",
+    "tbody", "tr", "ul", "ol", "select", "form",
 ];
 
 /// Cheap open/close balance count per structural tag. Script/style bodies and
@@ -539,23 +612,34 @@ const HTML_PAIRED_TAGS: &[&str] = &[
 fn check_html_balance(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?.to_lowercase();
     let mut content = raw;
-    for (open, close) in [("<script", "</script>"), ("<style", "</style>"), ("<!--", "-->")] {
+    for (open, close) in [
+        ("<script", "</script>"),
+        ("<style", "</style>"),
+        ("<!--", "-->"),
+    ] {
         while let (Some(s), Some(e)) = (content.find(open), content.find(close)) {
-            if e <= s { break; }
+            if e <= s {
+                break;
+            }
             // Remove the whole block, delimiters included, so neither the
             // block body nor the tags themselves are counted.
             content.replace_range(s..e + close.len(), "");
         }
     }
     let count = |needle: &str, boundary: bool| {
-        content.match_indices(needle).filter(|(i, _)| {
-            if !boundary { return true; }
-            // Opening tag: name must end at whitespace, '>' or '/'.
-            content[i + needle.len()..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
-        }).count()
+        content
+            .match_indices(needle)
+            .filter(|(i, _)| {
+                if !boundary {
+                    return true;
+                }
+                // Opening tag: name must end at whitespace, '>' or '/'.
+                content[i + needle.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
+            })
+            .count()
     };
     for tag in HTML_PAIRED_TAGS {
         let opens = count(&format!("<{tag}"), true);
@@ -685,7 +769,10 @@ fn execute_with_guard(
         }
         if cfg.reliability.syntax_check && profile.write_intent && profile.verify_artifacts {
             if let Some((file, detail)) = syntax_gate(written) {
-                return VerificationResult::Fail(VerificationFailReason::SyntaxError { file, detail });
+                return VerificationResult::Fail(VerificationFailReason::SyntaxError {
+                    file,
+                    detail,
+                });
             }
         }
         VerificationResult::Pass
@@ -696,15 +783,22 @@ fn execute_with_guard(
         cfg.reliability.escalate_on_retry_failure && cfg.model.cloud.is_some();
 
     // Attempt 1 — local model
-    let (exit_code, changed, written) = match run_and_detect(cfg, &step.description, repo_root, ctx) {
+    let (exit_code, changed, written) = match run_and_detect(cfg, &step.description, repo_root, ctx)
+    {
         Ok(pair) => pair,
         Err(e) => {
             tracing::error!(step = step_index, error = %e, "engine error on attempt 1");
             let event = build_event(
-                task_id, task_snippet, step_index, execution_mode_str,
-                &local_provider, 1, -1,
+                task_id,
+                task_snippet,
+                step_index,
+                execution_mode_str,
+                &local_provider,
+                1,
+                -1,
                 &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
-                "fail", &profile.decision_reason,
+                "fail",
+                &profile.decision_reason,
             );
             let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
             events.push(event);
@@ -715,8 +809,16 @@ fn execute_with_guard(
 
     if matches!(v1, VerificationResult::Pass) {
         let event = build_event(
-            task_id, task_snippet, step_index, execution_mode_str,
-            &local_provider, 1, exit_code, &v1, "success", &profile.decision_reason,
+            task_id,
+            task_snippet,
+            step_index,
+            execution_mode_str,
+            &local_provider,
+            1,
+            exit_code,
+            &v1,
+            "success",
+            &profile.decision_reason,
         );
         let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
         events.push(event);
@@ -735,8 +837,16 @@ fn execute_with_guard(
     // follows, the final "fail" event below records it instead.
     if max_retries > 0 || escalation_available {
         let event = build_event(
-            task_id, task_snippet, step_index, execution_mode_str,
-            &local_provider, 1, exit_code, &v1, "retrying", &profile.decision_reason,
+            task_id,
+            task_snippet,
+            step_index,
+            execution_mode_str,
+            &local_provider,
+            1,
+            exit_code,
+            &v1,
+            "retrying",
+            &profile.decision_reason,
         );
         let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
         events.push(event);
@@ -787,15 +897,26 @@ fn execute_with_guard(
             }
         };
 
-        let (retry_exit, retry_changed, retry_written) = match run_and_detect(cfg, &retry_prompt, repo_root, ctx) {
+        let (retry_exit, retry_changed, retry_written) = match run_and_detect(
+            cfg,
+            &retry_prompt,
+            repo_root,
+            ctx,
+        ) {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!(step = step_index, attempt = attempt_num, error = %e, "engine error on retry");
                 let event = build_event(
-                    task_id, task_snippet, step_index, execution_mode_str,
-                    &local_provider, attempt_num, -1,
+                    task_id,
+                    task_snippet,
+                    step_index,
+                    execution_mode_str,
+                    &local_provider,
+                    attempt_num,
+                    -1,
                     &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
-                    "fail", &profile.decision_reason,
+                    "fail",
+                    &profile.decision_reason,
                 );
                 let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
                 events.push(event);
@@ -806,8 +927,15 @@ fn execute_with_guard(
 
         if matches!(v_retry, VerificationResult::Pass) {
             let event = build_event(
-                task_id, task_snippet, step_index, execution_mode_str,
-                &local_provider, attempt_num, retry_exit, &v_retry, "retry_success",
+                task_id,
+                task_snippet,
+                step_index,
+                execution_mode_str,
+                &local_provider,
+                attempt_num,
+                retry_exit,
+                &v_retry,
+                "retry_success",
                 &profile.decision_reason,
             );
             let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
@@ -827,10 +955,16 @@ fn execute_with_guard(
         // Same rule as attempt 1: log now only if another attempt follows.
         if retry_num < max_retries as u32 || escalation_available {
             let event = build_event(
-                task_id, task_snippet, step_index, execution_mode_str,
-                &local_provider, attempt_num, retry_exit,
+                task_id,
+                task_snippet,
+                step_index,
+                execution_mode_str,
+                &local_provider,
+                attempt_num,
+                retry_exit,
                 &VerificationResult::Fail(last_fail_reason.clone()),
-                "retrying", &profile.decision_reason,
+                "retrying",
+                &profile.decision_reason,
             );
             let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
             events.push(event);
@@ -840,7 +974,10 @@ fn execute_with_guard(
     // All local retries exhausted — try cloud escalation if configured
     let escalation_attempt = (2u32 + max_retries as u32) as u8;
     if escalation_available {
-        let cloud_label = cfg.model.cloud.as_ref()
+        let cloud_label = cfg
+            .model
+            .cloud
+            .as_ref()
             .map(|c| format!("cloud({}/{})", c.provider, c.model))
             .unwrap_or_else(|| "cloud".to_string());
 
@@ -849,15 +986,26 @@ fn execute_with_guard(
         let mut cloud_cfg = cfg.clone();
         cloud_cfg.routing.mode = RoutingMode::CloudPreferred;
 
-        let (esc_exit, esc_changed, esc_written) = match run_and_detect(&cloud_cfg, &step.description, repo_root, ctx) {
+        let (esc_exit, esc_changed, esc_written) = match run_and_detect(
+            &cloud_cfg,
+            &step.description,
+            repo_root,
+            ctx,
+        ) {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!(step = step_index, error = %e, "engine error on cloud escalation");
                 let event = build_event(
-                    task_id, task_snippet, step_index, execution_mode_str,
-                    &cloud_label, escalation_attempt, -1,
+                    task_id,
+                    task_snippet,
+                    step_index,
+                    execution_mode_str,
+                    &cloud_label,
+                    escalation_attempt,
+                    -1,
                     &VerificationResult::Fail(VerificationFailReason::NonZeroExit(-1)),
-                    "escalation_fail", &profile.decision_reason,
+                    "escalation_fail",
+                    &profile.decision_reason,
                 );
                 let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
                 events.push(event);
@@ -871,8 +1019,16 @@ fn execute_with_guard(
             VerificationResult::Fail(_) => ("escalation_fail", false),
         };
         let event = build_event(
-            task_id, task_snippet, step_index, execution_mode_str,
-            &cloud_label, escalation_attempt, esc_exit, &v_esc, outcome, &profile.decision_reason,
+            task_id,
+            task_snippet,
+            step_index,
+            execution_mode_str,
+            &cloud_label,
+            escalation_attempt,
+            esc_exit,
+            &v_esc,
+            outcome,
+            &profile.decision_reason,
         );
         let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
         events.push(event);
@@ -882,9 +1038,16 @@ fn execute_with_guard(
     // No cloud — log final local failure
     let final_v = VerificationResult::Fail(last_fail_reason);
     let event = build_event(
-        task_id, task_snippet, step_index, execution_mode_str,
-        &local_provider, escalation_attempt.saturating_sub(1), last_exit_code,
-        &final_v, "fail", &profile.decision_reason,
+        task_id,
+        task_snippet,
+        step_index,
+        execution_mode_str,
+        &local_provider,
+        escalation_attempt.saturating_sub(1),
+        last_exit_code,
+        &final_v,
+        "fail",
+        &profile.decision_reason,
     );
     let _ = append_reliability_log(repo_root, &cfg.reliability, &event);
     events.push(event);
@@ -992,30 +1155,44 @@ mod tests {
                 .current_dir(dir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status().unwrap();
+                .status()
+                .unwrap();
         }
     }
 
     fn write_file(dir: &std::path::Path, path: &str, content: &str) {
         let full = dir.join(path);
-        if let Some(p) = full.parent() { std::fs::create_dir_all(p).unwrap(); }
+        if let Some(p) = full.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
         std::fs::write(full, content).unwrap();
     }
 
     fn write_profile() -> TaskProfile {
-        TaskProfile { write_intent: true, complexity: TaskComplexity::Simple,
-            decision_reason: "test".to_string(), verify_artifacts: true }
+        TaskProfile {
+            write_intent: true,
+            complexity: TaskComplexity::Simple,
+            decision_reason: "test".to_string(),
+            verify_artifacts: true,
+        }
     }
     fn read_profile() -> TaskProfile {
-        TaskProfile { write_intent: false, complexity: TaskComplexity::Simple,
-            decision_reason: "test".to_string(), verify_artifacts: true }
+        TaskProfile {
+            write_intent: false,
+            complexity: TaskComplexity::Simple,
+            decision_reason: "test".to_string(),
+            verify_artifacts: true,
+        }
     }
 
     #[test]
     fn verify_nonzero_exit_always_fails() {
         let dir = tempdir().unwrap();
         init_git(dir.path());
-        let step = TaskStep { description: "x".to_string(), expected_paths: vec![] };
+        let step = TaskStep {
+            description: "x".to_string(),
+            expected_paths: vec![],
+        };
         assert!(matches!(
             verify_step(&step, &write_profile(), dir.path(), 1, false),
             VerificationResult::Fail(VerificationFailReason::NonZeroExit(1))
@@ -1026,15 +1203,24 @@ mod tests {
     fn verify_read_intent_empty_diff_passes() {
         let dir = tempdir().unwrap();
         init_git(dir.path());
-        let step = TaskStep { description: "review code".to_string(), expected_paths: vec![] };
-        assert!(matches!(verify_step(&step, &read_profile(), dir.path(), 0, false), VerificationResult::Pass));
+        let step = TaskStep {
+            description: "review code".to_string(),
+            expected_paths: vec![],
+        };
+        assert!(matches!(
+            verify_step(&step, &read_profile(), dir.path(), 0, false),
+            VerificationResult::Pass
+        ));
     }
 
     #[test]
     fn verify_write_intent_empty_diff_fails() {
         let dir = tempdir().unwrap();
         init_git(dir.path());
-        let step = TaskStep { description: "create foo.rs".to_string(), expected_paths: vec![] };
+        let step = TaskStep {
+            description: "create foo.rs".to_string(),
+            expected_paths: vec![],
+        };
         assert!(matches!(
             verify_step(&step, &write_profile(), dir.path(), 0, false),
             VerificationResult::Fail(VerificationFailReason::NoDiff)
@@ -1046,8 +1232,14 @@ mod tests {
         let dir = tempdir().unwrap();
         init_git(dir.path());
         write_file(dir.path(), "src/foo.rs", "fn hello() {}");
-        let step = TaskStep { description: "create src/foo.rs".to_string(), expected_paths: vec![] };
-        assert!(matches!(verify_step(&step, &write_profile(), dir.path(), 0, true), VerificationResult::Pass));
+        let step = TaskStep {
+            description: "create src/foo.rs".to_string(),
+            expected_paths: vec![],
+        };
+        assert!(matches!(
+            verify_step(&step, &write_profile(), dir.path(), 0, true),
+            VerificationResult::Pass
+        ));
     }
 
     #[test]
@@ -1059,7 +1251,10 @@ mod tests {
             description: "create src/foo.rs".to_string(),
             expected_paths: vec!["src/foo.rs".to_string()],
         };
-        assert!(matches!(verify_step(&step, &write_profile(), dir.path(), 0, true), VerificationResult::Pass));
+        assert!(matches!(
+            verify_step(&step, &write_profile(), dir.path(), 0, true),
+            VerificationResult::Pass
+        ));
     }
 
     #[test]
@@ -1131,7 +1326,10 @@ mod tests {
         let dir = tempdir().unwrap();
         // Write intent, no explicit expected paths, no git repo, but a change was
         // detected by the filesystem snapshot: must pass.
-        let step = TaskStep { description: "create data.js".to_string(), expected_paths: vec![] };
+        let step = TaskStep {
+            description: "create data.js".to_string(),
+            expected_paths: vec![],
+        };
         assert!(matches!(
             verify_step(&step, &write_profile(), dir.path(), 0, true),
             VerificationResult::Pass
@@ -1184,9 +1382,18 @@ mod tests {
         write_file(dir.path(), "target/junk.o", "x");
         write_file(dir.path(), "node_modules/pkg/index.js", "x");
         let snap = snapshot_mtimes(dir.path());
-        assert!(snap.keys().any(|p| p.ends_with("data.js")), "real file present");
-        assert!(!snap.keys().any(|p| p.ends_with("junk.o")), "target/ excluded");
-        assert!(!snap.keys().any(|p| p.ends_with("index.js")), "node_modules/ excluded");
+        assert!(
+            snap.keys().any(|p| p.ends_with("data.js")),
+            "real file present"
+        );
+        assert!(
+            !snap.keys().any(|p| p.ends_with("junk.o")),
+            "target/ excluded"
+        );
+        assert!(
+            !snap.keys().any(|p| p.ends_with("index.js")),
+            "node_modules/ excluded"
+        );
     }
 
     #[test]
@@ -1196,14 +1403,23 @@ mod tests {
             VerificationFailReason::MissingPaths(vec!["src/foo.rs".to_string()]).to_log_string(),
             "missing_paths:src/foo.rs"
         );
-        assert_eq!(VerificationFailReason::NonZeroExit(2).to_log_string(), "nonzero_exit:2");
+        assert_eq!(
+            VerificationFailReason::NonZeroExit(2).to_log_string(),
+            "nonzero_exit:2"
+        );
     }
 
-    fn default_cfg() -> ReliabilityConfig { ReliabilityConfig::default() }
+    fn default_cfg() -> ReliabilityConfig {
+        ReliabilityConfig::default()
+    }
 
     #[test]
     fn write_keywords_produce_write_intent() {
-        let p = classify_task("create src/foo.rs with a hello function", &default_cfg(), "qwen2.5:7b");
+        let p = classify_task(
+            "create src/foo.rs with a hello function",
+            &default_cfg(),
+            "qwen2.5:7b",
+        );
         assert!(p.write_intent);
     }
 
@@ -1211,7 +1427,8 @@ mod tests {
     fn read_keywords_produce_read_intent() {
         let p = classify_task(
             "review the changes in src/foo.rs and describe what they do",
-            &default_cfg(), "qwen2.5:7b",
+            &default_cfg(),
+            "qwen2.5:7b",
         );
         assert!(!p.write_intent);
     }
@@ -1225,42 +1442,72 @@ mod tests {
 
     #[test]
     fn seven_b_model_is_small() {
-        assert!(matches!(detect_model_tier("qwen2.5:7b", ""), ModelTier::Small));
+        assert!(matches!(
+            detect_model_tier("qwen2.5:7b", ""),
+            ModelTier::Small
+        ));
     }
 
     #[test]
     fn three_b_model_is_small() {
-        assert!(matches!(detect_model_tier("llama3.2:3b", ""), ModelTier::Small));
+        assert!(matches!(
+            detect_model_tier("llama3.2:3b", ""),
+            ModelTier::Small
+        ));
     }
 
     #[test]
     fn fourteen_b_model_is_medium() {
-        assert!(matches!(detect_model_tier("qwen2.5:14b", ""), ModelTier::Medium));
+        assert!(matches!(
+            detect_model_tier("qwen2.5:14b", ""),
+            ModelTier::Medium
+        ));
     }
 
     #[test]
     fn unknown_model_is_large() {
-        assert!(matches!(detect_model_tier("deepseek-coder-v2", ""), ModelTier::Large));
+        assert!(matches!(
+            detect_model_tier("deepseek-coder-v2", ""),
+            ModelTier::Large
+        ));
     }
 
     // Regression: contains("7b") used to classify 27b models as Small.
     #[test]
     fn twenty_seven_b_model_is_not_small() {
-        assert!(matches!(detect_model_tier("gemma2:27b", ""), ModelTier::Large));
-        assert!(matches!(detect_model_tier("qwen2.5:72b", ""), ModelTier::Large));
+        assert!(matches!(
+            detect_model_tier("gemma2:27b", ""),
+            ModelTier::Large
+        ));
+        assert!(matches!(
+            detect_model_tier("qwen2.5:72b", ""),
+            ModelTier::Large
+        ));
     }
 
     // gemma4:e4b and its num_ctx derivative must stay Large (decompose-free).
     #[test]
     fn e4b_derivative_is_large() {
-        assert!(matches!(detect_model_tier("gemma4:e4b", ""), ModelTier::Large));
-        assert!(matches!(detect_model_tier("gemma4-e4b-16k", ""), ModelTier::Large));
+        assert!(matches!(
+            detect_model_tier("gemma4:e4b", ""),
+            ModelTier::Large
+        ));
+        assert!(matches!(
+            detect_model_tier("gemma4-e4b-16k", ""),
+            ModelTier::Large
+        ));
     }
 
     #[test]
     fn tier_override_wins_over_name() {
-        assert!(matches!(detect_model_tier("qwen2.5:7b", "large"), ModelTier::Large));
-        assert!(matches!(detect_model_tier("gpt-4o", "small"), ModelTier::Small));
+        assert!(matches!(
+            detect_model_tier("qwen2.5:7b", "large"),
+            ModelTier::Large
+        ));
+        assert!(matches!(
+            detect_model_tier("gpt-4o", "small"),
+            ModelTier::Small
+        ));
     }
 
     #[test]
@@ -1272,7 +1519,11 @@ mod tests {
 
     #[test]
     fn single_file_task_is_simple_for_small_model() {
-        let p = classify_task("add a hello() function to src/main.rs", &default_cfg(), "qwen2.5:7b");
+        let p = classify_task(
+            "add a hello() function to src/main.rs",
+            &default_cfg(),
+            "qwen2.5:7b",
+        );
         assert!(matches!(p.complexity, TaskComplexity::Simple));
     }
 
@@ -1280,7 +1531,8 @@ mod tests {
     fn multi_file_task_is_complex_for_small_model() {
         let p = classify_task(
             "create src/foo.rs and src/bar.rs and src/baz.rs each with a hello() function",
-            &default_cfg(), "qwen2.5:7b",
+            &default_cfg(),
+            "qwen2.5:7b",
         );
         assert!(matches!(p.complexity, TaskComplexity::Complex));
     }
@@ -1291,7 +1543,8 @@ mod tests {
         cfg.decompose_threshold = Some(10); // very high
         let p = classify_task(
             "create src/foo.rs and src/bar.rs and src/baz.rs",
-            &cfg, "qwen2.5:7b",
+            &cfg,
+            "qwen2.5:7b",
         );
         assert!(matches!(p.complexity, TaskComplexity::Simple));
     }
@@ -1307,15 +1560,22 @@ mod tests {
     fn decompose_single_file_mention_yields_one_step() {
         let plan = decompose("add hello() to src/main.rs");
         assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].expected_paths, vec!["src/main.rs".to_string()]);
+        assert_eq!(
+            plan.steps[0].expected_paths,
+            vec!["src/main.rs".to_string()]
+        );
     }
 
     #[test]
     fn decompose_two_file_mentions_yield_two_steps() {
         let plan = decompose("create src/foo.rs and src/bar.rs");
         assert_eq!(plan.steps.len(), 2);
-        let paths: Vec<_> = plan.steps.iter()
-            .flat_map(|s| s.expected_paths.iter()).cloned().collect();
+        let paths: Vec<_> = plan
+            .steps
+            .iter()
+            .flat_map(|s| s.expected_paths.iter())
+            .cloned()
+            .collect();
         assert!(paths.contains(&"src/foo.rs".to_string()));
         assert!(paths.contains(&"src/bar.rs".to_string()));
     }
@@ -1378,7 +1638,8 @@ mod tests {
         // "data.js" three times + short task → 1 signal, stays Simple on small tier
         let p = classify_task(
             "update data.js so data.js exports X; data.js only",
-            &default_cfg(), "qwen2.5:7b",
+            &default_cfg(),
+            "qwen2.5:7b",
         );
         assert!(matches!(p.complexity, TaskComplexity::Simple));
     }
@@ -1400,7 +1661,8 @@ mod tests {
         );
         assert!(single_shot_expected_paths(
             "Create index.html linking styles.css and app.js via script tag"
-        ).is_empty());
+        )
+        .is_empty());
         assert!(single_shot_expected_paths("scaffold the project").is_empty());
     }
 
@@ -1419,8 +1681,12 @@ mod tests {
     #[test]
     fn is_append_task_detects_markers() {
         assert!(is_append_task("Append one new const USAGE to data.js"));
-        assert!(is_append_task("Add lines after the existing ones, do not remove them"));
-        assert!(!is_append_task("Overwrite data.js with EXACTLY this content"));
+        assert!(is_append_task(
+            "Add lines after the existing ones, do not remove them"
+        ));
+        assert!(!is_append_task(
+            "Overwrite data.js with EXACTLY this content"
+        ));
     }
 
     #[test]
@@ -1432,10 +1698,17 @@ mod tests {
 
         // Simulate the model replacing instead of appending
         write_file(dir.path(), "data.js", "const USAGE = [2];\n");
-        assert_eq!(lost_content_files(dir.path(), &before), vec!["data.js".to_string()]);
+        assert_eq!(
+            lost_content_files(dir.path(), &before),
+            vec!["data.js".to_string()]
+        );
 
         // A true append keeps the original content
-        write_file(dir.path(), "data.js", "const SERVICES = [1];\nconst USAGE = [2];\n");
+        write_file(
+            dir.path(),
+            "data.js",
+            "const SERVICES = [1];\nconst USAGE = [2];\n",
+        );
         assert!(lost_content_files(dir.path(), &before).is_empty());
     }
 
@@ -1460,11 +1733,16 @@ mod tests {
 
     #[test]
     fn syntax_gate_catches_broken_js() {
-        if !node_available() { return; } // CI without node: skip
+        if !node_available() {
+            return;
+        } // CI without node: skip
         let dir = tempdir().unwrap();
         write_file(dir.path(), "data.js", "const A = [{id: 1; cost: 2}];\n");
         let hit = syntax_gate(&[dir.path().join("data.js")]);
-        assert!(hit.is_some(), "semicolon inside object literal must fail node --check");
+        assert!(
+            hit.is_some(),
+            "semicolon inside object literal must fail node --check"
+        );
 
         write_file(dir.path(), "ok.js", "const A = [{id: 1, cost: 2}];\n");
         assert!(syntax_gate(&[dir.path().join("ok.js")]).is_none());
@@ -1484,7 +1762,8 @@ mod tests {
         let dir = tempdir().unwrap();
         // The exact failure from the field: an orphan extra </header>
         write_file(
-            dir.path(), "index.html",
+            dir.path(),
+            "index.html",
             "<html><body><header><h1>x</h1></header></header><main></main></body></html>",
         );
         let err = check_html_balance(&dir.path().join("index.html"));
@@ -1496,7 +1775,8 @@ mod tests {
     fn html_balance_passes_valid_page_and_ignores_script_strings() {
         let dir = tempdir().unwrap();
         write_file(
-            dir.path(), "index.html",
+            dir.path(),
+            "index.html",
             "<html><head><style>div{color:red}</style></head><body>\
              <div id=\"app\"></div>\
              <script>el.innerHTML = '<div class=\"row\">' + x;</script>\
@@ -1509,7 +1789,8 @@ mod tests {
     fn html_balance_ignores_unknown_and_void_tags() {
         let dir = tempdir().unwrap();
         write_file(
-            dir.path(), "index.html",
+            dir.path(),
+            "index.html",
             "<html><body><input><br><img src=\"x\"><span>t</span></body></html>",
         );
         assert!(check_html_balance(&dir.path().join("index.html")).is_none());
@@ -1526,10 +1807,13 @@ mod tests {
         after.insert(std::path::PathBuf::from("/x/edited.js"), t(200));
         after.insert(std::path::PathBuf::from("/x/new.js"), t(200));
         let written = files_written(&before, &after);
-        assert_eq!(written, vec![
-            std::path::PathBuf::from("/x/edited.js"),
-            std::path::PathBuf::from("/x/new.js"),
-        ]);
+        assert_eq!(
+            written,
+            vec![
+                std::path::PathBuf::from("/x/edited.js"),
+                std::path::PathBuf::from("/x/new.js"),
+            ]
+        );
     }
 
     #[test]
@@ -1568,11 +1852,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = ReliabilityConfig::default();
         let event = ReliabilityEvent {
-            task_id: "t1".to_string(), task_snippet: "create foo.rs".to_string(),
-            step_index: 0, execution_mode: "single_shot".to_string(),
-            provider: "local(qwen2.5:7b)".to_string(), attempt: 1, exit_code: 0,
-            verification: "pass".to_string(), outcome: "success".to_string(),
-            decision_reason: "simple".to_string(), timestamp: 1,
+            task_id: "t1".to_string(),
+            task_snippet: "create foo.rs".to_string(),
+            step_index: 0,
+            execution_mode: "single_shot".to_string(),
+            provider: "local(qwen2.5:7b)".to_string(),
+            attempt: 1,
+            exit_code: 0,
+            verification: "pass".to_string(),
+            outcome: "success".to_string(),
+            decision_reason: "simple".to_string(),
+            timestamp: 1,
         };
         append_reliability_log(dir.path(), &cfg, &event).unwrap();
         let path = dir.path().join(".codi/reliability.jsonl");
@@ -1587,11 +1877,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = ReliabilityConfig::default();
         let make_event = |task_id: &str, outcome: &str| ReliabilityEvent {
-            task_id: task_id.to_string(), task_snippet: "x".to_string(),
-            step_index: 0, execution_mode: "single_shot".to_string(),
-            provider: "local".to_string(), attempt: 1, exit_code: 0,
-            verification: "pass".to_string(), outcome: outcome.to_string(),
-            decision_reason: "y".to_string(), timestamp: 1,
+            task_id: task_id.to_string(),
+            task_snippet: "x".to_string(),
+            step_index: 0,
+            execution_mode: "single_shot".to_string(),
+            provider: "local".to_string(),
+            attempt: 1,
+            exit_code: 0,
+            verification: "pass".to_string(),
+            outcome: outcome.to_string(),
+            decision_reason: "y".to_string(),
+            timestamp: 1,
         };
         append_reliability_log(dir.path(), &cfg, &make_event("t1", "success")).unwrap();
         append_reliability_log(dir.path(), &cfg, &make_event("t2", "fail")).unwrap();
@@ -1608,14 +1904,22 @@ mod tests {
     #[test]
     fn append_log_noop_when_disabled() {
         let dir = tempdir().unwrap();
-        let mut cfg = ReliabilityConfig::default();
-        cfg.log_events = false;
+        let cfg = ReliabilityConfig {
+            log_events: false,
+            ..Default::default()
+        };
         let event = ReliabilityEvent {
-            task_id: "t2".to_string(), task_snippet: "x".to_string(),
-            step_index: 0, execution_mode: "single_shot".to_string(),
-            provider: "local".to_string(), attempt: 1, exit_code: 0,
-            verification: "pass".to_string(), outcome: "success".to_string(),
-            decision_reason: "y".to_string(), timestamp: 2,
+            task_id: "t2".to_string(),
+            task_snippet: "x".to_string(),
+            step_index: 0,
+            execution_mode: "single_shot".to_string(),
+            provider: "local".to_string(),
+            attempt: 1,
+            exit_code: 0,
+            verification: "pass".to_string(),
+            outcome: "success".to_string(),
+            decision_reason: "y".to_string(),
+            timestamp: 2,
         };
         append_reliability_log(dir.path(), &cfg, &event).unwrap();
         assert!(!dir.path().join(".codi/reliability.jsonl").exists());
@@ -1678,7 +1982,11 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.reliability.enabled = false;
         // Verify that classify_task works end-to-end with a real config
-        let profile = classify_task("create src/foo.rs", &cfg.reliability, &cfg.model.local.model);
+        let profile = classify_task(
+            "create src/foo.rs",
+            &cfg.reliability,
+            &cfg.model.local.model,
+        );
         assert!(profile.write_intent);
         // 1 file signal < threshold=2 for small model → Simple
         assert!(matches!(profile.complexity, TaskComplexity::Simple));
@@ -1721,8 +2029,16 @@ mod tests {
     fn build_event_produces_correct_fields() {
         let v = VerificationResult::Pass;
         let event = build_event(
-            "task-abc", "create src/foo.rs", 0, "single_shot",
-            "local(qwen2.5:7b)", 1, 0, &v, "success", "signals=0",
+            "task-abc",
+            "create src/foo.rs",
+            0,
+            "single_shot",
+            "local(qwen2.5:7b)",
+            1,
+            0,
+            &v,
+            "success",
+            "signals=0",
         );
         assert_eq!(event.task_id, "task-abc");
         assert_eq!(event.provider, "local(qwen2.5:7b)");
@@ -1738,8 +2054,16 @@ mod tests {
     fn build_event_fail_reason_encoded_correctly() {
         let v = VerificationResult::Fail(VerificationFailReason::NoDiff);
         let event = build_event(
-            "t1", "create foo.rs", 0, "single_shot",
-            "cloud(anthropic/claude-3-5-sonnet)", 3, 0, &v, "escalation_fail", "retry exhausted",
+            "t1",
+            "create foo.rs",
+            0,
+            "single_shot",
+            "cloud(anthropic/claude-3-5-sonnet)",
+            3,
+            0,
+            &v,
+            "escalation_fail",
+            "retry exhausted",
         );
         assert_eq!(event.verification, "no_diff");
         assert_eq!(event.outcome, "escalation_fail");

@@ -10,7 +10,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use codi_rag::{db, index::IndexConfig, index::index_repo, search::bm25_search, search::format_context};
+use codi_rag::{
+    db, index::index_repo, index::IndexConfig, search::bm25_search, search::format_context,
+};
 
 #[derive(Parser)]
 #[command(name = "codi-rag", about = "codi repository RAG index and MCP server")]
@@ -104,14 +106,10 @@ fn mcp_server_loop(conn: rusqlite::Connection) -> Result<()> {
             continue;
         }
 
-        let req: serde_json::Value =
-            serde_json::from_str(&line).context("parsing mcp request")?;
+        let req: serde_json::Value = serde_json::from_str(&line).context("parsing mcp request")?;
 
         let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
-        let method = req
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = req.get("params").cloned().unwrap_or_default();
 
         let result = dispatch(&conn, method, &params);
@@ -139,13 +137,11 @@ fn dispatch(
     params: &serde_json::Value,
 ) -> Result<serde_json::Value> {
     match method {
-        "initialize" | "notifications/initialized" => {
-            Ok(serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "codi-rag", "version": env!("CARGO_PKG_VERSION") }
-            }))
-        }
+        "initialize" | "notifications/initialized" => Ok(serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "codi-rag", "version": env!("CARGO_PKG_VERSION") }
+        })),
         "tools/list" => Ok(serde_json::json!({
             "tools": [
                 {
@@ -191,8 +187,8 @@ fn dispatch(
                 }
                 "get_file" => {
                     let path = args["path"].as_str().context("missing path")?;
-                    let content = std::fs::read_to_string(path)
-                        .with_context(|| format!("reading {path}"))?;
+                    let content =
+                        std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
                     Ok(serde_json::json!({
                         "content": [{ "type": "text", "text": content }]
                     }))

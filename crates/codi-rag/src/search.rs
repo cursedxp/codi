@@ -86,7 +86,11 @@ pub fn rrf_fuse(bm25: Vec<Chunk>, vector: Vec<Chunk>, k: usize) -> Vec<Chunk> {
             c
         })
         .collect();
-    fused.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    fused.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     fused.truncate(k);
     fused
 }
@@ -112,8 +116,15 @@ fn escape_fts5(q: &str) -> String {
     let tokens: Vec<String> = q
         .split_whitespace()
         .map(|t| {
-            let safe: String = t.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-            if safe.is_empty() { String::new() } else { format!("{safe}*") }
+            let safe: String = t
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if safe.is_empty() {
+                String::new()
+            } else {
+                format!("{safe}*")
+            }
         })
         .filter(|t| !t.is_empty())
         .collect();
@@ -147,7 +158,11 @@ mod tests {
     #[test]
     fn bm25_finds_inserted_content() {
         let (conn, _dir) = setup();
-        insert_chunk(&conn, "src/lib.rs", "pub fn hello_world() { println!(\"Hello\"); }");
+        insert_chunk(
+            &conn,
+            "src/lib.rs",
+            "pub fn hello_world() { println!(\"Hello\"); }",
+        );
 
         let results = bm25_search(&conn, "hello world", 5).unwrap();
         assert!(!results.is_empty());

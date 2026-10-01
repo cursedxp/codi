@@ -6,7 +6,11 @@ use crate::config::SelfImprovementConfig;
 use crate::signals::{Signal, SignalKind, SignalSet};
 
 const HIGH_RISK_KEYWORDS: &[&str] = &[
-    "security", "architecture", "api-breaking", "breaking", "migration",
+    "security",
+    "architecture",
+    "api-breaking",
+    "breaking",
+    "migration",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -124,8 +128,7 @@ fn signal_to_candidate(
         }
 
         SignalKind::DiffWithoutTest => {
-            let description =
-                "Add tests for changed files without test coverage".to_string();
+            let description = "Add tests for changed files without test coverage".to_string();
             Some(ImprovementCandidate {
                 id,
                 description,
@@ -249,7 +252,10 @@ fn classify_risk(
         }
     }
 
-    (RiskLevel::Low, "lint-only change in non-blocklist file".to_string())
+    (
+        RiskLevel::Low,
+        "lint-only change in non-blocklist file".to_string(),
+    )
 }
 
 fn generate_id(index: usize) -> String {

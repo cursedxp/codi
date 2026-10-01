@@ -1,7 +1,7 @@
-use std::path::Path;
-use anyhow::{Context, Result};
 use crate::ollama;
 use crate::setup::{detect_ollama, pick_model_interactive};
+use anyhow::{Context, Result};
+use std::path::Path;
 
 const MCP_JSON_CONTENT: &str = "{\n  \"mcpServers\": {\n    \"codi\": {\n      \"command\": \"codi\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n";
 const CODI_MCP_KEY: &str = "codi";
@@ -49,9 +49,8 @@ pub fn run_init(repo_root: &Path, rewrite_config: bool) -> Result<()> {
 
     // [1/6] Ollama
     println!("[1/6] Ollama check");
-    let base_url = detect_ollama().map_err(|e| {
+    let base_url = detect_ollama().inspect_err(|_| {
         println!("✗ Ollama not found. Install: brew install ollama && ollama serve");
-        e
     })?;
     println!("  ✓ Ollama running ({})", base_url);
 
@@ -137,7 +136,10 @@ fn write_config(repo_root: &Path, base_url: &str, model: &str, rewrite_config: b
                 .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
             if let toml::Value::Table(ref mut lt) = local_tbl {
                 lt.insert("model".to_string(), toml::Value::String(model.to_string()));
-                lt.insert("base_url".to_string(), toml::Value::String(base_url.to_string()));
+                lt.insert(
+                    "base_url".to_string(),
+                    toml::Value::String(base_url.to_string()),
+                );
             }
         }
     }
@@ -219,7 +221,8 @@ pub(crate) fn ensure_mcp_json(repo_root: &Path) -> Result<()> {
                         CODI_MCP_KEY: {"command": "codi", "args": ["mcp"]}
                     });
                 }
-                let pretty = serde_json::to_string_pretty(&json).context("serializing .mcp.json")?;
+                let pretty =
+                    serde_json::to_string_pretty(&json).context("serializing .mcp.json")?;
                 std::fs::write(&path, pretty).context("writing .mcp.json")?;
                 println!("  ✓ .mcp.json — codi entry added");
             }
@@ -290,12 +293,17 @@ pub(crate) fn ensure_claude_md(repo_root: &Path) -> Result<()> {
 
     // No codi block yet: append one, preserving existing content.
     use std::io::Write as IoWrite;
-    let sep = if content.ends_with('\n') { "\n" } else { "\n\n" };
+    let sep = if content.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
     let mut file = std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
         .context("opening CLAUDE.md for append")?;
-    file.write_all(format!("{sep}{block}").as_bytes()).context("appending to CLAUDE.md")?;
+    file.write_all(format!("{sep}{block}").as_bytes())
+        .context("appending to CLAUDE.md")?;
     println!("  \u{2713} CLAUDE.md \u{2014} codi section appended");
     Ok(())
 }
@@ -352,13 +360,17 @@ mod tests {
 
     #[test]
     fn fill_defaults_adds_missing_section() {
-        let existing: toml::Value = toml::from_str(r#"
+        let existing: toml::Value = toml::from_str(
+            r#"
 [model.local]
 model = "qwen2.5:7b"
 base_url = "http://localhost:11434/v1"
 api_key = ""
-"#).unwrap();
-        let defaults: toml::Value = toml::from_str(r#"
+"#,
+        )
+        .unwrap();
+        let defaults: toml::Value = toml::from_str(
+            r#"
 [model.local]
 model = "default-model"
 base_url = "http://localhost:11434/v1"
@@ -366,7 +378,9 @@ api_key = ""
 
 [routing]
 mode = "local-only"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let (merged, added) = fill_defaults(existing, defaults);
         assert!(added >= 1, "routing section should be added");
         assert!(merged.get("routing").is_some());
@@ -379,14 +393,20 @@ mode = "local-only"
 
     #[test]
     fn fill_defaults_preserves_existing_values() {
-        let existing: toml::Value = toml::from_str(r#"
+        let existing: toml::Value = toml::from_str(
+            r#"
 [routing]
 mode = "hybrid"
-"#).unwrap();
-        let defaults: toml::Value = toml::from_str(r#"
+"#,
+        )
+        .unwrap();
+        let defaults: toml::Value = toml::from_str(
+            r#"
 [routing]
 mode = "local-only"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let (merged, added) = fill_defaults(existing, defaults);
         assert_eq!(added, 0);
         assert_eq!(merged["routing"]["mode"].as_str().unwrap(), "hybrid");
@@ -394,12 +414,15 @@ mode = "local-only"
 
     #[test]
     fn fill_defaults_no_change_when_complete() {
-        let existing: toml::Value = toml::from_str(r#"
+        let existing: toml::Value = toml::from_str(
+            r#"
 [model.local]
 model = "qwen2.5:7b"
 base_url = "http://localhost:11434/v1"
 api_key = ""
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let defaults = existing.clone();
         let (_, added) = fill_defaults(existing, defaults);
         assert_eq!(added, 0);
@@ -435,7 +458,10 @@ api_key = ""
         let content = std::fs::read_to_string(&path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(json["mcpServers"]["codi"]["command"].as_str() == Some("codi"));
-        assert!(json["mcpServers"]["other"].is_object(), "other entry preserved");
+        assert!(
+            json["mcpServers"]["other"].is_object(),
+            "other entry preserved"
+        );
     }
 
     #[test]
@@ -466,12 +492,16 @@ api_key = ""
     #[test]
     fn write_config_merge_overwrites_model_selection() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("codi.toml"), concat!(
-            "[model.local]\n",
-            "model = \"old-model\"\n",
-            "base_url = \"http://localhost:11434/v1\"\n",
-            "api_key = \"\"\n",
-        )).unwrap();
+        std::fs::write(
+            dir.path().join("codi.toml"),
+            concat!(
+                "[model.local]\n",
+                "model = \"old-model\"\n",
+                "base_url = \"http://localhost:11434/v1\"\n",
+                "api_key = \"\"\n",
+            ),
+        )
+        .unwrap();
         write_config(dir.path(), "http://localhost:11434/v1", "new-model", false).unwrap();
         let content = std::fs::read_to_string(dir.path().join("codi.toml")).unwrap();
         assert!(content.contains("new-model"), "model must be overwritten");
@@ -486,7 +516,10 @@ api_key = ""
         assert!(content.contains(CODI_MD_START), "must contain start marker");
         assert!(content.contains(CODI_MD_END), "must contain end marker");
         assert!(content.contains("run_task"), "must mention run_task");
-        assert!(content.contains("codi model list"), "must include capacity guidance");
+        assert!(
+            content.contains("codi model list"),
+            "must include capacity guidance"
+        );
     }
 
     #[test]
@@ -496,7 +529,10 @@ api_key = ""
         std::fs::write(&path, "# My Project\n\nExisting content.\n").unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.starts_with("# My Project"), "existing content preserved");
+        assert!(
+            content.starts_with("# My Project"),
+            "existing content preserved"
+        );
         assert!(content.contains(CODI_MD_START), "codi block appended");
     }
 
@@ -510,12 +546,28 @@ api_key = ""
         std::fs::write(&path, &original).unwrap();
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(!content.contains("OLD STALE CONTENT"), "stale block replaced");
-        assert!(content.contains("codi model list"), "fresh guidance present");
-        assert!(content.contains("# My Project"), "content before block preserved");
-        assert!(content.contains("## Other\nkeep me"), "content after block preserved");
+        assert!(
+            !content.contains("OLD STALE CONTENT"),
+            "stale block replaced"
+        );
+        assert!(
+            content.contains("codi model list"),
+            "fresh guidance present"
+        );
+        assert!(
+            content.contains("# My Project"),
+            "content before block preserved"
+        );
+        assert!(
+            content.contains("## Other\nkeep me"),
+            "content after block preserved"
+        );
         // Exactly one marker pair.
-        assert_eq!(content.matches(CODI_MD_START).count(), 1, "single start marker");
+        assert_eq!(
+            content.matches(CODI_MD_START).count(),
+            1,
+            "single start marker"
+        );
         assert_eq!(content.matches(CODI_MD_END).count(), 1, "single end marker");
     }
 
@@ -528,11 +580,21 @@ api_key = ""
         ensure_claude_md(dir.path()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains(CODI_MD_START), "delimited block added");
-        assert!(content.contains("codi model list"), "fresh guidance present");
+        assert!(
+            content.contains("codi model list"),
+            "fresh guidance present"
+        );
         assert!(!content.contains("Old content"), "legacy section removed");
-        assert_eq!(content.matches("## codi").count(), 1, "no duplicate codi heading");
+        assert_eq!(
+            content.matches("## codi").count(),
+            1,
+            "no duplicate codi heading"
+        );
         assert!(content.contains("# My Project"), "title preserved");
-        assert!(content.contains("## Other\nkeep me"), "sibling section preserved");
+        assert!(
+            content.contains("## Other\nkeep me"),
+            "sibling section preserved"
+        );
     }
 
     #[test]

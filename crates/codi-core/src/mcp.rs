@@ -144,13 +144,13 @@ fn dispatch(cfg: &Config, repo_root: &Path, method: &str, params: &Value) -> Res
             let args = params.get("arguments").cloned().unwrap_or_default();
 
             match name {
-                "run_task"                   => tool_run_task(cfg, repo_root, &args),
-                "get_diff"                   => tool_get_diff(repo_root, &args),
-                "run_tests"                  => tool_run_tests(cfg, repo_root),
-                "list_pending_improvements"  => tool_list_pending(repo_root),
-                "approve_improvement"        => tool_approve(cfg, repo_root, &args),
-                "dismiss_improvement"        => tool_dismiss(repo_root, &args),
-                other                        => anyhow::bail!("unknown tool: {other}"),
+                "run_task" => tool_run_task(cfg, repo_root, &args),
+                "get_diff" => tool_get_diff(repo_root, &args),
+                "run_tests" => tool_run_tests(cfg, repo_root),
+                "list_pending_improvements" => tool_list_pending(repo_root),
+                "approve_improvement" => tool_approve(cfg, repo_root, &args),
+                "dismiss_improvement" => tool_dismiss(repo_root, &args),
+                other => anyhow::bail!("unknown tool: {other}"),
             }
         }
 
@@ -175,8 +175,10 @@ fn tool_run_task(cfg: &Config, repo_root: &Path, args: &Value) -> Result<Value> 
     } else {
         format!(
             "Task failed ({}/{} steps, mode={}, reason={}). Check terminal output for details.",
-            outcome.steps_succeeded, outcome.steps_total,
-            outcome.execution_mode, outcome.decision_reason
+            outcome.steps_succeeded,
+            outcome.steps_total,
+            outcome.execution_mode,
+            outcome.decision_reason
         )
     };
 
@@ -243,9 +245,8 @@ fn tool_run_tests(cfg: &Config, repo_root: &Path) -> Result<Value> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    let text = format!(
-        "exit_code: {exit_code}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-    );
+    let text =
+        format!("exit_code: {exit_code}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}");
 
     Ok(serde_json::json!({
         "content": [{ "type": "text", "text": text }]
@@ -255,20 +256,27 @@ fn tool_run_tests(cfg: &Config, repo_root: &Path) -> Result<Value> {
 fn tool_list_pending(repo_root: &Path) -> Result<Value> {
     let pending_path = repo_root.join(".codi/pending_improvements.json");
     let queue = crate::pending::PendingQueue::load(&pending_path)?;
-    let items: Vec<Value> = queue.items().iter().map(|c| serde_json::json!({
-        "id":             c.id,
-        "description":    c.description,
-        "risk":           format!("{:?}", c.risk),
-        "risk_reason":    c.risk_reason,
-        "context":        c.context,
-        "source_signals": c.source_signals,
-        "created_at":     c.created_at,
-    })).collect();
+    let items: Vec<Value> = queue
+        .items()
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id":             c.id,
+                "description":    c.description,
+                "risk":           format!("{:?}", c.risk),
+                "risk_reason":    c.risk_reason,
+                "context":        c.context,
+                "source_signals": c.source_signals,
+                "created_at":     c.created_at,
+            })
+        })
+        .collect();
     let count = items.len();
     let text = serde_json::to_string_pretty(&serde_json::json!({
         "pending": items,
         "count":   count,
-    })).context("serializing pending list")?;
+    }))
+    .context("serializing pending list")?;
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
 
@@ -277,7 +285,8 @@ fn tool_approve(cfg: &Config, repo_root: &Path, args: &Value) -> Result<Value> {
 
     let pending_path = repo_root.join(".codi/pending_improvements.json");
     let mut queue = crate::pending::PendingQueue::load(&pending_path)?;
-    let candidate = queue.remove(id)
+    let candidate = queue
+        .remove(id)
         .ok_or_else(|| anyhow::anyhow!("no pending improvement with id '{id}'"))?;
     queue.save()?;
 
@@ -285,22 +294,22 @@ fn tool_approve(cfg: &Config, repo_root: &Path, args: &Value) -> Result<Value> {
     let outcome = executor.run_approved(&candidate)?;
 
     let text = match &outcome {
-        crate::improve::Outcome::Applied { branch } =>
-            serde_json::to_string(&serde_json::json!({
-                "outcome": "Applied",
-                "branch": branch,
-                "tests_passed": true
-            })).unwrap_or_else(|_| r#"{"outcome":"Applied"}"#.to_string()),
-        crate::improve::Outcome::Failed { reason } =>
-            serde_json::to_string(&serde_json::json!({
-                "outcome": "Failed",
-                "reason": reason
-            })).unwrap_or_else(|_| r#"{"outcome":"Failed"}"#.to_string()),
-        crate::improve::Outcome::Skipped { reason } =>
-            serde_json::to_string(&serde_json::json!({
-                "outcome": "Skipped",
-                "reason": reason
-            })).unwrap_or_else(|_| r#"{"outcome":"Skipped"}"#.to_string()),
+        crate::improve::Outcome::Applied { branch } => serde_json::to_string(&serde_json::json!({
+            "outcome": "Applied",
+            "branch": branch,
+            "tests_passed": true
+        }))
+        .unwrap_or_else(|_| r#"{"outcome":"Applied"}"#.to_string()),
+        crate::improve::Outcome::Failed { reason } => serde_json::to_string(&serde_json::json!({
+            "outcome": "Failed",
+            "reason": reason
+        }))
+        .unwrap_or_else(|_| r#"{"outcome":"Failed"}"#.to_string()),
+        crate::improve::Outcome::Skipped { reason } => serde_json::to_string(&serde_json::json!({
+            "outcome": "Skipped",
+            "reason": reason
+        }))
+        .unwrap_or_else(|_| r#"{"outcome":"Skipped"}"#.to_string()),
     };
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
@@ -311,26 +320,30 @@ fn tool_dismiss(repo_root: &Path, args: &Value) -> Result<Value> {
 
     let pending_path = repo_root.join(".codi/pending_improvements.json");
     let mut queue = crate::pending::PendingQueue::load(&pending_path)?;
-    let candidate = queue.remove(id)
+    let candidate = queue
+        .remove(id)
         .ok_or_else(|| anyhow::anyhow!("no pending improvement with id '{id}'"))?;
     queue.save()?;
 
-    crate::improve::append_log(repo_root, &crate::improve::LogEntry {
-        id: candidate.id.clone(),
-        description: candidate.description.clone(),
-        risk: format!("{:?}", candidate.risk),
-        branch: String::new(),
-        outcome: "Dismissed".to_string(),
-        reason,
-        approved_by_claude: false,
-        blocklist_bypassed: false,
-        source_signals: candidate.source_signals,
-        created_at: candidate.created_at,
-        completed_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    })?;
+    crate::improve::append_log(
+        repo_root,
+        &crate::improve::LogEntry {
+            id: candidate.id.clone(),
+            description: candidate.description.clone(),
+            risk: format!("{:?}", candidate.risk),
+            branch: String::new(),
+            outcome: "Dismissed".to_string(),
+            reason,
+            approved_by_claude: false,
+            blocklist_bypassed: false,
+            source_signals: candidate.source_signals,
+            created_at: candidate.created_at,
+            completed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+    )?;
 
     let text = serde_json::json!({"outcome": "Dismissed", "id": id}).to_string();
     Ok(serde_json::json!({
@@ -360,7 +373,8 @@ mod mcp_improve_tests {
                 .current_dir(dir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status().unwrap();
+                .status()
+                .unwrap();
         }
     }
 
@@ -369,10 +383,16 @@ mod mcp_improve_tests {
         let dir = tempdir().unwrap();
         init_git(dir.path());
         let cfg = Config::default();
-        let result = dispatch(&cfg, dir.path(), "tools/call", &serde_json::json!({
-            "name": "list_pending_improvements",
-            "arguments": {}
-        })).unwrap();
+        let result = dispatch(
+            &cfg,
+            dir.path(),
+            "tools/call",
+            &serde_json::json!({
+                "name": "list_pending_improvements",
+                "arguments": {}
+            }),
+        )
+        .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["count"], 0);
@@ -384,10 +404,15 @@ mod mcp_improve_tests {
         let dir = tempdir().unwrap();
         init_git(dir.path());
         let cfg = Config::default();
-        let result = dispatch(&cfg, dir.path(), "tools/call", &serde_json::json!({
-            "name": "approve_improvement",
-            "arguments": { "id": "doesnotexist" }
-        }));
+        let result = dispatch(
+            &cfg,
+            dir.path(),
+            "tools/call",
+            &serde_json::json!({
+                "name": "approve_improvement",
+                "arguments": { "id": "doesnotexist" }
+            }),
+        );
         assert!(result.is_err());
     }
 
@@ -396,10 +421,15 @@ mod mcp_improve_tests {
         let dir = tempdir().unwrap();
         init_git(dir.path());
         let cfg = Config::default();
-        let result = dispatch(&cfg, dir.path(), "tools/call", &serde_json::json!({
-            "name": "dismiss_improvement",
-            "arguments": { "id": "nope", "reason": "not relevant" }
-        }));
+        let result = dispatch(
+            &cfg,
+            dir.path(),
+            "tools/call",
+            &serde_json::json!({
+                "name": "dismiss_improvement",
+                "arguments": { "id": "nope", "reason": "not relevant" }
+            }),
+        );
         assert!(result.is_err());
     }
 

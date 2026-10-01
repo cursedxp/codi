@@ -7,13 +7,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum SignalKind {
-    LintWarning { category: String, detail: String },
-    TestFailure { test_name: String, module: String },
+    LintWarning {
+        category: String,
+        detail: String,
+    },
+    TestFailure {
+        test_name: String,
+        module: String,
+    },
     DiffWithoutTest,
     /// context_radius: how many neighbouring modules to scan (0 = changed files only).
-    TodoFixme { text: String, file: String, context_radius: usize },
+    TodoFixme {
+        text: String,
+        file: String,
+        context_radius: usize,
+    },
     /// Separate from code-quality signals — tracks agent execution health.
-    AgentReliability { exit_code: i32, tool_failures: Vec<String> },
+    AgentReliability {
+        exit_code: i32,
+        tool_failures: Vec<String>,
+    },
     VerificationFail {
         task_snippet: String,
         missing_paths: Vec<String>,
@@ -69,7 +82,11 @@ pub fn collect_signals(
             let detail = line[idx + ": warning: ".len()..].to_string();
             let category = detail
                 .rfind('[')
-                .and_then(|s| detail[s..].rfind(']').map(|e| detail[s + 1..s + e].to_string()))
+                .and_then(|s| {
+                    detail[s..]
+                        .rfind(']')
+                        .map(|e| detail[s + 1..s + e].to_string())
+                })
                 .unwrap_or_else(|| "clippy".to_string());
             set.push(SignalKind::LintWarning { category, detail });
         }
@@ -132,7 +149,9 @@ mod tests {
     fn clippy_warning_parsed() {
         let clippy = "crates/codi-core/src/routing.rs:45:5: warning: function `is_complex` has a cognitive complexity of 25 [clippy::cognitive_complexity]";
         let s = collect_signals(Path::new("/tmp"), clippy, &[], 0);
-        let warnings: Vec<_> = s.signals.iter()
+        let warnings: Vec<_> = s
+            .signals
+            .iter()
             .filter(|sig| matches!(&sig.kind, SignalKind::LintWarning { .. }))
             .collect();
         assert_eq!(warnings.len(), 1);
@@ -147,7 +166,10 @@ mod tests {
     fn diff_without_test_fires_when_no_test_file_changed() {
         let changed = vec!["crates/codi-core/src/routing.rs".to_string()];
         let s = collect_signals(Path::new("/tmp"), "", &changed, 0);
-        assert!(s.signals.iter().any(|sig| matches!(sig.kind, SignalKind::DiffWithoutTest)));
+        assert!(s
+            .signals
+            .iter()
+            .any(|sig| matches!(sig.kind, SignalKind::DiffWithoutTest)));
     }
 
     #[test]
@@ -157,7 +179,10 @@ mod tests {
             "crates/codi-core/tests/integration_engine.rs".to_string(),
         ];
         let s = collect_signals(Path::new("/tmp"), "", &changed, 0);
-        assert!(!s.signals.iter().any(|sig| matches!(sig.kind, SignalKind::DiffWithoutTest)));
+        assert!(!s
+            .signals
+            .iter()
+            .any(|sig| matches!(sig.kind, SignalKind::DiffWithoutTest)));
     }
 
     #[test]
@@ -170,7 +195,10 @@ mod tests {
 
     #[test]
     fn parse_diff_line_count_insertions_and_deletions() {
-        assert_eq!(parse_diff_line_count(" 2 files changed, 18 insertions(+), 8 deletions(-)"), 26);
+        assert_eq!(
+            parse_diff_line_count(" 2 files changed, 18 insertions(+), 8 deletions(-)"),
+            26
+        );
     }
 
     #[test]
@@ -195,7 +223,10 @@ mod tests {
                 severity: 1,
             }],
         };
-        assert!(matches!(&s.signals[0].kind, SignalKind::VerificationFail { .. }));
+        assert!(matches!(
+            &s.signals[0].kind,
+            SignalKind::VerificationFail { .. }
+        ));
     }
 
     #[test]
@@ -209,6 +240,9 @@ mod tests {
                 severity: 1,
             }],
         };
-        assert!(matches!(&s.signals[0].kind, SignalKind::EscalationTriggered { .. }));
+        assert!(matches!(
+            &s.signals[0].kind,
+            SignalKind::EscalationTriggered { .. }
+        ));
     }
 }

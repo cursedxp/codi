@@ -5,7 +5,7 @@
 //! so we can assert the correct provider/model routing.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codi_core::config::{Config, RoutingConfig, RoutingMode};
 use codi_core::engine::{run_session, SessionMode};
@@ -32,10 +32,12 @@ fn fake_goose(dir: &std::path::Path) -> PathBuf {
     path
 }
 
-fn cfg_with_goose_bin(bin: &PathBuf, mode: RoutingMode) -> Config {
-    let mut cfg = Config::default();
-    cfg.goose_bin = Some(bin.to_str().unwrap().to_string());
-    cfg.routing = RoutingConfig { mode };
+fn cfg_with_goose_bin(bin: &Path, mode: RoutingMode) -> Config {
+    let mut cfg = Config {
+        goose_bin: Some(bin.to_str().unwrap().to_string()),
+        routing: RoutingConfig { mode },
+        ..Default::default()
+    };
     cfg.safety.confirm_commands = false;
     cfg.safety.confirm_writes = false;
     cfg
@@ -106,8 +108,10 @@ test = "echo ok"
 #[test]
 fn engine_fails_gracefully_when_goose_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = Config::default();
-    cfg.goose_bin = Some("/nonexistent/path/goose".to_string());
+    let cfg = Config {
+        goose_bin: Some("/nonexistent/path/goose".to_string()),
+        ..Default::default()
+    };
 
     let result = run_session(
         &cfg,
@@ -133,18 +137,19 @@ fn engine_passes_system_standards_to_goose() {
     // Rewrite fake-goose to write args to a file for inspection.
     std::fs::write(
         &goose,
-        format!(
-            "#!/bin/sh\necho \"$@\" > {out_path}\nexit 0\n"
-        ),
-    ).unwrap();
+        format!("#!/bin/sh\necho \"$@\" > {out_path}\nexit 0\n"),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&goose, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let mut cfg = Config::default();
-    cfg.goose_bin = Some(script_path.to_string());
+    let mut cfg = Config {
+        goose_bin: Some(script_path.to_string()),
+        ..Default::default()
+    };
     cfg.safety.confirm_commands = false;
     cfg.safety.confirm_writes = false;
 
@@ -155,7 +160,8 @@ fn engine_passes_system_standards_to_goose() {
         None,
         dir.path(),
         "",
-    ).unwrap();
+    )
+    .unwrap();
 
     let args = std::fs::read_to_string(&goose_output_file).unwrap();
     assert!(

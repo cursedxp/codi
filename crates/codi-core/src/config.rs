@@ -138,8 +138,8 @@ impl Default for RagConfig {
                 ".codi/**".to_string(),
             ],
             extensions: vec![
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "rb", "c", "h",
-                "cpp", "hpp", "md", "toml", "yaml", "yml", "json",
+                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "rb", "c", "h", "cpp", "hpp",
+                "md", "toml", "yaml", "yml", "json",
             ]
             .into_iter()
             .map(String::from)
@@ -400,11 +400,14 @@ base_url = "http://localhost:9999/v1"
 
     #[test]
     fn self_improvement_partial_override() {
-        let c = Config::from_toml(r#"
+        let c = Config::from_toml(
+            r#"
 [self_improvement]
 enabled = false
 max_auto_per_run = 5
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         assert!(!c.self_improvement.enabled);
         assert_eq!(c.self_improvement.max_auto_per_run, 5);
         // unset field inherits default
@@ -434,12 +437,15 @@ max_auto_per_run = 5
 
     #[test]
     fn reliability_partial_override() {
-        let c = Config::from_toml(r#"
+        let c = Config::from_toml(
+            r#"
 [reliability]
 enabled = false
 max_retries = 0
 model_tier = "small"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         assert!(!c.reliability.enabled);
         assert_eq!(c.reliability.max_retries, 0);
         assert_eq!(c.reliability.model_tier, "small");

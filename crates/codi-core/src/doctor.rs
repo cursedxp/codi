@@ -1,7 +1,7 @@
-use std::path::Path;
-use anyhow::Result;
 use crate::config::Config;
 use crate::ollama;
+use anyhow::Result;
+use std::path::Path;
 
 pub enum Severity {
     Ok,
@@ -157,18 +157,16 @@ pub fn run_doctor_fix(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>
             continue;
         }
         match check.id {
-            CheckId::McpJson => {
-                match crate::init::ensure_mcp_json(repo_root) {
-                    Ok(()) => {
-                        check.severity = Severity::Ok;
-                        check.detail = "fixed".to_string();
-                        check.suggestion = None;
-                    }
-                    Err(e) => {
-                        check.detail = format!("fix failed: {e:#}");
-                    }
+            CheckId::McpJson => match crate::init::ensure_mcp_json(repo_root) {
+                Ok(()) => {
+                    check.severity = Severity::Ok;
+                    check.detail = "fixed".to_string();
+                    check.suggestion = None;
                 }
-            }
+                Err(e) => {
+                    check.detail = format!("fix failed: {e:#}");
+                }
+            },
             CheckId::McpRegistration => {
                 let ok = std::process::Command::new("claude")
                     .args(["mcp", "add", "codi", "--", "codi", "mcp"])
@@ -185,18 +183,16 @@ pub fn run_doctor_fix(repo_root: &Path, cfg: &Config) -> Result<Vec<CheckResult>
                     check.detail = format!("{} (fix failed)", check.detail);
                 }
             }
-            CheckId::ClaudeMd => {
-                match crate::init::ensure_claude_md(repo_root) {
-                    Ok(()) => {
-                        check.severity = Severity::Ok;
-                        check.detail = "fixed".to_string();
-                        check.suggestion = None;
-                    }
-                    Err(e) => {
-                        check.detail = format!("fix failed: {e:#}");
-                    }
+            CheckId::ClaudeMd => match crate::init::ensure_claude_md(repo_root) {
+                Ok(()) => {
+                    check.severity = Severity::Ok;
+                    check.detail = "fixed".to_string();
+                    check.suggestion = None;
                 }
-            }
+                Err(e) => {
+                    check.detail = format!("fix failed: {e:#}");
+                }
+            },
             _ => {}
         }
     }
@@ -401,7 +397,8 @@ fn check_claude_md(repo_root: &Path) -> CheckResult {
 }
 
 fn check_reliability_log(repo_root: &Path, cfg: &Config) -> CheckResult {
-    let log_path = match crate::reliability::resolve_log_path(repo_root, &cfg.reliability.log_path) {
+    let log_path = match crate::reliability::resolve_log_path(repo_root, &cfg.reliability.log_path)
+    {
         Ok(p) => p,
         Err(_) => {
             return CheckResult {
@@ -454,20 +451,35 @@ fn check_reliability_log(repo_root: &Path, cfg: &Config) -> CheckResult {
         };
     }
 
-    let succeeded = last_20.iter().filter(|e| {
-        matches!(
-            e.get("outcome").and_then(|v| v.as_str()).unwrap_or(""),
-            "success" | "retry_success" | "escalation_success"
-        )
-    }).count();
+    let succeeded = last_20
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.get("outcome").and_then(|v| v.as_str()).unwrap_or(""),
+                "success" | "retry_success" | "escalation_success"
+            )
+        })
+        .count();
 
-    let silent_failures = last_20.iter().filter(|e| {
-        e.get("verification").and_then(|v| v.as_str()).unwrap_or("").contains("no_diff")
-    }).count();
+    let silent_failures = last_20
+        .iter()
+        .filter(|e| {
+            e.get("verification")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("no_diff")
+        })
+        .count();
 
-    let escalations = last_20.iter().filter(|e| {
-        e.get("outcome").and_then(|v| v.as_str()).unwrap_or("").contains("escalation")
-    }).count();
+    let escalations = last_20
+        .iter()
+        .filter(|e| {
+            e.get("outcome")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("escalation")
+        })
+        .count();
 
     let success_pct = (succeeded * 100) / total;
 
@@ -524,7 +536,9 @@ mod tests {
     use crate::config::Config;
     use tempfile::tempdir;
 
-    fn default_cfg() -> Config { Config::default() }
+    fn default_cfg() -> Config {
+        Config::default()
+    }
 
     fn init_toml(dir: &std::path::Path, model: &str) {
         let content = format!(
@@ -566,7 +580,8 @@ mod tests {
         std::fs::write(
             dir.path().join(".mcp.json"),
             r#"{"mcpServers":{"codi":{"command":"codi","args":["mcp"]}}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let mcp_check = checks.iter().find(|c| c.id == CheckId::McpJson).unwrap();
         assert!(matches!(mcp_check.severity, Severity::Ok));
@@ -614,17 +629,28 @@ mod tests {
             suggestion: None,
             fixable: true,
         }];
-        assert!(print_doctor_report(&checks), "error present must return true");
+        assert!(
+            print_doctor_report(&checks),
+            "error present must return true"
+        );
     }
 
     #[test]
     fn doctor_fix_creates_mcp_json_and_marks_ok() {
         let dir = tempdir().unwrap();
         let checks = run_doctor_fix(dir.path(), &default_cfg()).unwrap();
-        assert!(dir.path().join(".mcp.json").exists(), "file must be created");
-        let mcp = checks.iter().find(|c| c.id == CheckId::McpJson)
+        assert!(
+            dir.path().join(".mcp.json").exists(),
+            "file must be created"
+        );
+        let mcp = checks
+            .iter()
+            .find(|c| c.id == CheckId::McpJson)
             .expect("McpJson check must be present");
-        assert!(matches!(mcp.severity, Severity::Ok), "severity must be Ok after fix");
+        assert!(
+            matches!(mcp.severity, Severity::Ok),
+            "severity must be Ok after fix"
+        );
     }
 
     #[test]
@@ -659,7 +685,11 @@ mod tests {
     #[test]
     fn check_claude_md_with_codi_section_returns_ok() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("CLAUDE.md"), "# Project\n\n## codi\n\nContent.\n").unwrap();
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "# Project\n\n## codi\n\nContent.\n",
+        )
+        .unwrap();
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
         let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd).unwrap();
         assert!(matches!(c.severity, Severity::Ok));
@@ -669,17 +699,28 @@ mod tests {
     fn doctor_fix_creates_claude_md_and_marks_ok() {
         let dir = tempdir().unwrap();
         let checks = run_doctor_fix(dir.path(), &default_cfg()).unwrap();
-        assert!(dir.path().join("CLAUDE.md").exists(), "CLAUDE.md must be created");
-        let c = checks.iter().find(|c| c.id == CheckId::ClaudeMd)
+        assert!(
+            dir.path().join("CLAUDE.md").exists(),
+            "CLAUDE.md must be created"
+        );
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ClaudeMd)
             .expect("ClaudeMd check must be present");
-        assert!(matches!(c.severity, Severity::Ok), "severity must be Ok after fix");
+        assert!(
+            matches!(c.severity, Severity::Ok),
+            "severity must be Ok after fix"
+        );
     }
 
     #[test]
     fn reliability_log_missing_returns_info() {
         let dir = tempdir().unwrap();
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
         assert!(matches!(c.severity, Severity::Info));
     }
 
@@ -692,10 +733,21 @@ mod tests {
         let success_line = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
         use std::io::Write as _;
         for _ in 0..5 {
-            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success_line}").unwrap();
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{success_line}"
+            )
+            .unwrap();
         }
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
         assert!(matches!(c.severity, Severity::Ok), "detail: {}", c.detail);
     }
 
@@ -706,14 +758,29 @@ mod tests {
         std::fs::create_dir_all(&log_dir).unwrap();
         let log_path = log_dir.join("reliability.jsonl");
         let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
-        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"no_diff","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        let fail = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"no_diff","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
         use std::io::Write as _;
         for line in [success, success, fail, fail, fail] {
-            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{line}"
+            )
+            .unwrap();
         }
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
-        assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
+        assert!(
+            matches!(c.severity, Severity::Error),
+            "detail: {}",
+            c.detail
+        );
     }
 
     #[test]
@@ -723,7 +790,10 @@ mod tests {
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("reliability.jsonl"), "").unwrap();
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
         assert!(matches!(c.severity, Severity::Info), "detail: {}", c.detail);
     }
 
@@ -734,15 +804,30 @@ mod tests {
         std::fs::create_dir_all(&log_dir).unwrap();
         let log_path = log_dir.join("reliability.jsonl");
         let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
-        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        let fail = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
         use std::io::Write as _;
         // 2 success, 4 fail → 33% success < 70%
         for line in [success, success, fail, fail, fail, fail] {
-            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{line}").unwrap();
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{line}"
+            )
+            .unwrap();
         }
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
-        assert!(matches!(c.severity, Severity::Error), "detail: {}", c.detail);
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
+        assert!(
+            matches!(c.severity, Severity::Error),
+            "detail: {}",
+            c.detail
+        );
     }
 
     #[test]
@@ -752,14 +837,41 @@ mod tests {
         std::fs::create_dir_all(&log_dir).unwrap();
         let log_path = log_dir.join("reliability.jsonl");
         let success = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":0,"verification":"pass","outcome":"success","decision_reason":"ok","timestamp":1}"#;
-        let fail   = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
+        let fail = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"local","attempt":1,"exit_code":1,"verification":"nonzero_exit:1","outcome":"fail","decision_reason":"ok","timestamp":1}"#;
         use std::io::Write as _;
         // 8 success, 2 fail → 80% → Warning (≥70 but <90)
-        for _ in 0..8 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{success}").unwrap(); }
-        for _ in 0..2 { writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{fail}").unwrap(); }
+        for _ in 0..8 {
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{success}"
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{fail}"
+            )
+            .unwrap();
+        }
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
-        assert!(matches!(c.severity, Severity::Warning), "detail: {}", c.detail);
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
+        assert!(
+            matches!(c.severity, Severity::Warning),
+            "detail: {}",
+            c.detail
+        );
     }
 
     #[test]
@@ -771,12 +883,27 @@ mod tests {
         let escalation = r#"{"task_id":"t","task_snippet":"x","step_index":0,"execution_mode":"single_shot","provider":"cloud","attempt":3,"exit_code":0,"verification":"pass","outcome":"escalation_success","decision_reason":"ok","timestamp":1}"#;
         use std::io::Write as _;
         for _ in 0..5 {
-            writeln!(std::fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap(), "{escalation}").unwrap();
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .unwrap(),
+                "{escalation}"
+            )
+            .unwrap();
         }
         let checks = run_doctor(dir.path(), &default_cfg()).unwrap();
-        let c = checks.iter().find(|c| c.id == CheckId::ReliabilityLog).unwrap();
+        let c = checks
+            .iter()
+            .find(|c| c.id == CheckId::ReliabilityLog)
+            .unwrap();
         // 5 escalation_success events → succeeded=5, total=5 → Ok severity
         // But escalation count (5) should appear in the detail
-        assert!(c.detail.contains('5'), "detail should mention escalation count: {}", c.detail);
+        assert!(
+            c.detail.contains('5'),
+            "detail should mention escalation count: {}",
+            c.detail
+        );
     }
 }
