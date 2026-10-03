@@ -21,11 +21,7 @@ them fails before review.
 ## Hard limits (CI-enforced)
 
 - At most **3 changed files** and **fewer than 300 changed lines** per PR.
-- Never modify: `.github/**`, `AGENTS.md`, any `Cargo.toml`, `Cargo.lock`,
-  `crates/*/tests/**`.
-- Never modify these files (architect-only): `crates/codi-core/src/engine.rs`,
-  `crates/codi-core/src/reliability.rs`, `crates/codi-core/src/mcp.rs`,
-  `crates/codi-core/src/improve.rs`.
+- Never modify files matching: `(^|/)\.env($|\.)`, `\.(pem|key|p12|pfx)$`, `(^|/)id_(rsa|ed25519|ecdsa)`, `(^|/)credentials`, `(^|/)\.npmrc$`, `(^|/)\.netrc$`, `(^|/)secrets?\.`, `^\.github/`, `^AGENTS\.md$`, `(^|/)Cargo\.(toml|lock)$`, `^crates/[^/]+/tests/`, `^crates/codi-core/src/(engine|reliability|mcp|improve)\.rs$`
 - Never delete or weaken an existing test: no removed lines containing
   `#[test]`, `#[tokio::test]` or `assert`. You may **add** tests.
 - Do not add dependencies.
