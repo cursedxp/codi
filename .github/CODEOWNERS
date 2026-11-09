@@ -1,6 +1,5 @@
 # Agent pipeline guardrails — these paths need the owner's review.
 /.github/                                @cursedxp
-/AGENTS.md                               @cursedxp
 /Cargo.toml                              @cursedxp
 /Cargo.lock                              @cursedxp
 /crates/*/Cargo.toml                     @cursedxp
